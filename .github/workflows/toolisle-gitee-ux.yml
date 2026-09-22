@@ -34,7 +34,7 @@ jobs:
             git add DynamicIsland
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'fix(gitee): retain original last-window handoff and main-actor diagnostics'
+            git commit -m 'fix(gitee): distinguish user-facing documents from invisible AppKit helpers'
             git push origin HEAD:refs/heads/fix/gitee-reader-window-ux
           fi
       - uses: maxim-lobanov/setup-xcode@v1
