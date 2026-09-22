@@ -5,7 +5,7 @@ import Defaults
 import SwiftUI
 
 @MainActor
-final class GIReaderWindowController: NSWindowController {
+final class GIReaderWindowController: NSWindowController, NSWindowDelegate {
     static let shared = GIReaderWindowController()
     private init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 660),
@@ -19,22 +19,45 @@ final class GIReaderWindowController: NSWindowController {
         super.init(window: window)
         window.collectionBehavior = [.managed, .participatesInCycle]
         window.hidesOnDeactivate = false
+        window.isExcludedFromWindowsMenu = false
+        window.identifier = NSUserInterfaceItemIdentifier("ToolIsle.GiteeReader")
+        window.delegate = self
         ScreenCaptureVisibilityManager.shared.register(window, scope: .panelsOnly)
     }
     required init?(coder: NSCoder) { return nil }
     func show(route: GIIssueRoute? = nil) {
         if let route { GIStore.shared.open(route, fromList: true) }
+        guard let window else { return }
+        GIReaderSession.shared.opened(window)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        NSApp.unhide(nil)
         showWindow(nil)
-        window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        window.makeMain()
+        window.makeKeyAndOrderFront(nil)
         // Explicit synthetic UI preview only; ordinary launches are unchanged.
         if ProcessInfo.processInfo.arguments.contains("--gitee-settings-preview") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { GISettingsNavigation.shared.open() }
         }
     }
+    func windowWillClose(_ notification: Notification) {
+        if let window { GIReaderSession.shared.closed(window) }
+    }
+    func windowDidBecomeKey(_ notification: Notification) {
+        if GIReaderSession.shared.isOpen { NSApp.setActivationPolicy(.regular) }
+    }
+    func showFilters() {
+        show()
+        NotificationCenter.default.post(name: .giteeFocusFilters, object: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NotificationCenter.default.post(name: .giteeFocusFilters, object: nil)
+        }
+    }
 }
 
 struct GINotchView: View {
+    var screenName: String? = nil
+    @ObservedObject private var layout = GINotchLayout.shared
     @ObservedObject private var store = GIStore.shared
     private let secondary = Color.white.opacity(0.70)
 
@@ -59,6 +82,14 @@ struct GINotchView: View {
             }
             .frame(height: 24)
             .accessibilityIdentifier("gitee-notch-header")
+
+            HStack(spacing: 8) {
+                Text(store.filterSummary).font(.system(size: 10)).foregroundStyle(secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                Button("调整筛选") { GIReaderWindowController.shared.showFilters() }
+                    .buttonStyle(.plain).font(.system(size: 10))
+            }.frame(height: 18)
 
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -88,10 +119,10 @@ struct GINotchView: View {
                     } else if store.filteredItems.isEmpty {
                         message("当前筛选没有匹配的 Issue", detail: "已加载 \(store.items.count) 条，均被项目、状态或搜索条件过滤。")
                         action("清除筛选，显示已加载 Issues") {
-                            store.query = ""; store.repositoryFilter = ""; store.stateFilter = "all"
+                            store.clearFilters()
                         }
                     } else {
-                        ForEach(Array(store.filteredItems.prefix(3))) { item in
+                        ForEach(Array(store.filteredItems.prefix(layout.metrics.limit))) { item in
                             Button { GIReaderWindowController.shared.show(route: item.route) } label: {
                                 HStack(alignment: .center, spacing: 8) {
                                     Image(systemName: item.issue.state == "closed" ? "checkmark.circle" : "circle.dotted")
@@ -106,6 +137,7 @@ struct GINotchView: View {
                                         .foregroundStyle(secondary).fixedSize()
                                 }
                                 .padding(.horizontal, 8).padding(.vertical, 3)
+                                .frame(height: GINotchMetrics.rowHeight)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 7))
                                 .contentShape(Rectangle())
@@ -126,7 +158,7 @@ struct GINotchView: View {
             .accessibilityIdentifier("gitee-notch-content")
 
             HStack {
-                Text(store.items.isEmpty ? "只读查看" : "筛选后 \(store.filteredItems.count) / 已加载 \(store.items.count)")
+                Text(store.items.isEmpty ? "只读查看" : "显示 \(min(store.filteredItems.count, layout.metrics.limit)) / 匹配 \(store.filteredItems.count) 条")
                     .font(.system(size: 10)).foregroundStyle(secondary).lineLimit(1)
                 Spacer(minLength: 4)
                 Button { GIReaderWindowController.shared.show() } label: {
@@ -143,12 +175,11 @@ struct GINotchView: View {
         // preferredColorScheme would also change enclosing presentations.
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
-        // Fit below the original header within the existing 250pt Gitee panel.
-        // A finite budget keeps controls visible and long/error content scrollable.
-        .frame(height: 190, alignment: .topLeading)
+        // Same bounded metrics as the native window and the mouse interaction area.
+        .frame(height: layout.contentHeight(screenName: screenName), alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .accessibilityIdentifier("gitee-notch-surface")
-        .onAppear { store.activate() }
+        .onAppear { store.activate(); layout.refreshNow() }
     }
 
     private func message(_ title: String, detail: String) -> some View {
@@ -188,14 +219,15 @@ struct GIReaderRootView: View {
                 }
             } else {
                 HSplitView {
-                    if showList { GIIssueListView().frame(minWidth: 240, idealWidth: 280, maxWidth: 320) }
+                    if showList { GIIssueListView().frame(minWidth: 260, idealWidth: 320, maxWidth: 380) }
                     detail.frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .frame(minWidth: 720, minHeight: 420)
-                .onAppear { store.activate() }
+        .onReceive(NotificationCenter.default.publisher(for: .giteeFocusFilters)) { _ in showList = true }
+        .onAppear { store.activate() }
         .onChange(of: enabled) { _, value in if value { store.activate() } }
     }
     private var header: some View {
@@ -209,12 +241,13 @@ struct GIReaderRootView: View {
             Text(store.demoMode ? "Gitee · 离线演示" : "Gitee Issues").font(.headline)
             Spacer(minLength: 8)
             if let visit = store.visit {
+                GICopyIssueButton(url: visit.route.url)
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
                 Menu { 
                     Button("缩小正文") { store.textScale = max(0.85, store.textScale - 0.1) }
                     Button("放大正文") { store.textScale = min(1.6, store.textScale + 0.1) }
                     Toggle("加载 Gitee 远程图片", isOn: $store.loadRemoteImages)
-                    Divider()
-                    Button("复制 Issue 链接") { GIPasteboard.copy(visit.sourceURL.absoluteString) }
+
                 } label: { Image(systemName: "textformat.size") }.help("阅读选项")
                 Button { store.loadCurrent(force: true) } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(store.loadingDetail || store.demoMode).help("刷新当前 Issue").keyboardShortcut("r", modifiers: .command)
@@ -284,45 +317,23 @@ private struct GIIssueListView: View {
     @State private var showFailures = false
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 10) {
-                Picker("项目", selection: $store.repositoryFilter) {
-                    Text("全部已选项目").tag("")
-                    ForEach(store.selectedRepositories) { Text($0.full_name).tag($0.path) }
-                }.labelsHidden()
-                TextField("搜索已加载的标题或编号", text: $store.query)
-                    .textFieldStyle(.roundedBorder).accessibilityLabel("搜索已加载的 Issue")
-                HStack {
-                    Picker("状态", selection: $store.stateFilter) {
-                        Text("未完成").tag("unfinished"); Text("全部状态").tag("all")
-                        Text("开启").tag("open"); Text("进行中").tag("progressing")
-                        Text("已关闭").tag("closed"); Text("已拒绝").tag("rejected")
-                    }.labelsHidden()
-                    Button { store.refreshIssues(reset: true) } label: { Image(systemName: "arrow.clockwise") }
-                        .disabled(store.loadingList || store.demoMode).help("刷新已选项目")
-                }
-            }.padding(12)
+            GIFilterBar()
             Divider()
             if store.filteredItems.isEmpty {
                 VStack(spacing: 10) {
                     if store.loadingList { ProgressView().controlSize(.small) }
                     Text(store.loadingList ? "正在读取项目…" : (store.selectedRepositories.isEmpty ? "请先选择查看项目" : (!store.listFailures.isEmpty && store.items.isEmpty ? "项目读取失败，请查看下方原因或重试" : "已加载范围内没有匹配结果")))
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    if !store.items.isEmpty && store.hasActiveFilters {
+                        Button("清除筛选") { store.clearFilters() }.buttonStyle(.bordered)
+                    }
                 }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: Binding<GIIssueRoute?>(get: { store.selectedListID }, set: { value in
                     if let value { store.open(value, fromList: true) }
                 })) {
                     ForEach(store.filteredItems) { item in
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text(item.issue.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
-                            HStack(spacing: 5) {
-                                Text(item.route.repository).lineLimit(1).truncationMode(.middle)
-                                Spacer(minLength: 0)
-                                Text(item.issue.stateTitle)
-                            }.font(.caption2).foregroundStyle(.secondary)
-                            Text("#\(item.issue.number) · \(String((item.issue.updated_at ?? "").prefix(16)).replacingOccurrences(of: "T", with: " "))")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }.padding(.vertical, 6).tag(item.route)
+                        GIIssueRow(item: item, selected: store.selectedListID == item.route).tag(item.route)
                             .contextMenu { Button("复制链接") { GIPasteboard.copy(item.route.url.absoluteString) } }
                     }
                 }.listStyle(.inset)
@@ -418,10 +429,10 @@ private struct GIEmptyState<Actions: View>: View {
 }
 
 enum GIPasteboard {
-    static func copy(_ string: String) {
-        guard string.utf8.count <= 2 * 1024 * 1024 else { return }
+    @discardableResult static func copy(_ string: String) -> Bool {
+        guard string.utf8.count <= 2 * 1024 * 1024 else { return false }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(string, forType: .string)
+        return NSPasteboard.general.setString(string, forType: .string)
     }
 }
 

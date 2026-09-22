@@ -418,9 +418,19 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
         focusClipboardTabIfNeeded()
     }
     
+    func refreshGiteeNotchSize() {
+        guard coordinator.currentView == .giteeIssues, notchState == .open,
+              !Defaults[.enableMinimalisticUI] else { return }
+        let target = GINotchLayout.shared.size(base: openNotchSize, screenName: screen)
+        if notchSize != target { notchSize = target }
+    }
+
     private func calculateDynamicNotchSize() -> CGSize {
         let baseSize = Defaults[.enableMinimalisticUI] ? minimalisticOpenNotchSize(isDynamicIslandMode: shouldUseDynamicIslandMode(for: screen)) : openNotchSize
         var adjustedSize = baseSize
+        if coordinator.currentView == .giteeIssues && !Defaults[.enableMinimalisticUI] {
+            return GINotchLayout.shared.size(base: baseSize, screenName: screen)
+        }
 
         if coordinator.currentView == .notes || coordinator.currentView == .clipboard {
             let preferred = coordinator.notesLayoutState.preferredHeight
@@ -508,8 +518,8 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
                 alert.addButton(withTitle: String(localized: "OK"))
                 alert.runModal()
 
-                NSApp.setActivationPolicy(.accessory)
-                NSApp.deactivate()
+                GIReaderSession.shared.restorePolicy()
+                if !GIReaderSession.shared.isOpen { NSApp.deactivate() }
             }
 
         case .notDetermined:

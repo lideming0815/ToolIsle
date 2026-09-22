@@ -121,8 +121,8 @@ class SettingsWindowController: NSWindowController {
     private func relinquishFocus() {
         window?.orderOut(nil)
         
-        // Set app back to accessory mode immediately
-        NSApp.setActivationPolicy(.accessory)
+        // A still-open Gitee reader remains a normal switchable application window.
+        GIReaderSession.shared.settingsClosed(window)
     }
     
     deinit {

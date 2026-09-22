@@ -102,6 +102,12 @@ final class GIStore: ObservableObject {
             (query.isEmpty || item.issue.title.localizedCaseInsensitiveContains(query) || item.route.label.localizedCaseInsensitiveContains(query))
         }
     }
+    var hasActiveFilters: Bool { !query.isEmpty || !repositoryFilter.isEmpty || stateFilter != "all" }
+    var filterSummary: String {
+        let states = ["all":"全部状态", "unfinished":"未完成", "open":"开启", "progressing":"进行中", "closed":"已关闭", "rejected":"已拒绝"]
+        return (repositoryFilter.isEmpty ? "全部已选项目" : repositoryFilter) + " · " + (states[stateFilter] ?? stateFilter) + (query.isEmpty ? "" : " · 搜索：" + query)
+    }
+    func clearFilters() { query = ""; repositoryFilter = ""; stateFilter = "all" }
     private var selectionKey: String? { account.map { "toolisle.gitee.selection.\($0.id)" } }
 
     /// Called only by the opt-in reader surfaces, never by application launch.
@@ -365,6 +371,17 @@ final class GIStore: ObservableObject {
         repositories = repos; selectedRepositories = [repos[0]]
         items = [GIListItem(route: Self.demoA, issue: Self.demoIssue(Self.demoA))]
         lastSync = Date(); open(Self.demoA, fromList: true)
+    }
+    func setUXDemoCount(_ count: Int) {
+        guard demoMode, ProcessInfo.processInfo.arguments.contains("--gitee-ux-probe") else { return }
+        items = (0..<max(0, min(count, 20))).map { n in
+            let route = n == 0 ? Self.demoA : GIIssueRoute(repository: Self.demoA.repository, number: "IDEMO\(n)")
+            let issue = GIIssue(id: Int64(n + 1), number: route.number,
+                title: n == 0 ? Self.demoIssue(Self.demoA).title : "离线演示 \(n + 1)：验证列表、筛选与窗口交互",
+                state: "progressing", body: nil, html_url: route.url.absoluteString,
+                user: account, updated_at: "2026-09-22T08:30:00+08:00", comments: 0)
+            return GIListItem(route: route, issue: issue)
+        }
     }
     static let demoA = GIIssueRoute(repository: "toolisle-demo/workbench", number: "IDEMOA")
     static let demoB = GIIssueRoute(repository: "toolisle-demo/shared", number: "IDEMOB")
