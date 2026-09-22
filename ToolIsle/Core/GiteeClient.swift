@@ -183,13 +183,13 @@ public actor GiteeClient {
         try await load(repositoryPath(repo) + ["branches"], query: pagination(page))
     }
     public func files(_ repo: GiteeRepository, path: String, ref: String) async throws -> GiteeResource<[GiteeFile]> {
-        try await load(repositoryPath(repo) + ["contents"] + GiteePath.segments(path), query: [.init(name: "ref", value: ref)])
+        try await load(repositoryPath(repo) + ["contents"] + GiteePath.segments(path), query: ref.isEmpty ? [] : [.init(name: "ref", value: ref)])
     }
     public func file(_ repo: GiteeRepository, path: String, ref: String) async throws -> GiteeResource<GiteeFile> {
-        try await load(repositoryPath(repo) + ["contents"] + GiteePath.segments(path), query: [.init(name: "ref", value: ref)])
+        try await load(repositoryPath(repo) + ["contents"] + GiteePath.segments(path), query: ref.isEmpty ? [] : [.init(name: "ref", value: ref)])
     }
     public func readme(_ repo: GiteeRepository, ref: String) async throws -> GiteeResource<GiteeFile> {
-        try await load(repositoryPath(repo) + ["readme"], query: [.init(name: "ref", value: ref)])
+        try await load(repositoryPath(repo) + ["readme"], query: ref.isEmpty ? [] : [.init(name: "ref", value: ref)])
     }
     private func pagination(_ page: Int) -> [URLQueryItem] {
         [.init(name: "page", value: String(max(1, page))), .init(name: "per_page", value: "100")]
@@ -210,8 +210,8 @@ public actor GiteeClient {
             switch response.statusCode {
             case 200: break
             case 401: try? clearCache(); throw GiteeError.unauthorized
-            case 403: cache.removeValue(forKey: url.absoluteString); throw GiteeError.forbidden
-            case 404: cache.removeValue(forKey: url.absoluteString); throw GiteeError.notFound
+            case 403: try? clearCache(); throw GiteeError.forbidden
+            case 404: try? clearCache(); throw GiteeError.notFound
             case 429:
                 let seconds = min(3600, max(1, Int(response.value(forHTTPHeaderField: "Retry-After") ?? "60") ?? 60))
                 blockedUntil = Date().addingTimeInterval(Double(seconds))

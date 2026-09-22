@@ -271,7 +271,7 @@ struct RepositoryFiles: View {
         loading = true; failure = nil; defer { loading = false }
         do {
             let result = try await client.files(repo, path: directory, ref: ref); try Task.checkCancellation()
-            file = nil; entries = result.value.sorted { ($0.type != "dir", $0.name) < ($1.type != "dir", $1.name) }; path = directory; offline = result.cachedAt
+            file = nil; entries = result.value.sorted { ($0.type == "dir" && $1.type != "dir") || ($0.type == $1.type && $0.name.localizedStandardCompare($1.name) == .orderedAscending) }; path = directory; offline = result.cachedAt
         } catch { failure = error.localizedDescription; account.report(error) }
     }
     private func openPath() async {
