@@ -17,26 +17,12 @@ jobs:
     if: github.repository == 'lideming0815/ToolIsle' && github.ref == 'refs/heads/fix/gitee-reader-window-ux'
     runs-on: macos-26
     timeout-minutes: 40
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
-          ref: fix/gitee-reader-window-ux
-      - name: Finalize reviewed scoped integration
-        run: |
-          set -euo pipefail
-          if [ -f scripts/apply_gitee_ux_patch.py ]; then
-            python3 scripts/apply_gitee_ux_patch.py
-            git rm scripts/apply_gitee_ux_patch.py
-            git add DynamicIsland DynamicIsland.xcodeproj tests
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'test(gitee): complete adaptive-view and user-directed window lifecycle regressions'
-            git push origin HEAD:refs/heads/fix/gitee-reader-window-ux
-          fi
+          ref: ${{ github.sha }}
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
@@ -67,6 +53,7 @@ jobs:
           PY
           swiftc DynamicIsland/ToolIsleFeatures/Gitee/GINotchMetrics.swift tests/GiteeUXMetricsRegression.swift -o "$RUNNER_TEMP/GiteeUXMetricsRegression"
           "$RUNNER_TEMP/GiteeUXMetricsRegression" | tee "$RUNNER_TEMP/gitee-fix-output/ux-metrics-tests.txt"
+          swiftc tests/GiteeActivationDriver.swift -o "$RUNNER_TEMP/GiteeActivationDriver"
       - name: Render actual production notch in both appearances and ten data states
         run: |
           OUT="$RUNNER_TEMP/gitee-fix-output" python3 tests/render_gitee_notch.py | tee "$RUNNER_TEMP/gitee-fix-output/ux-appearance-tests.txt"
@@ -81,7 +68,7 @@ jobs:
           PY
           bash scripts/.build_ux_preview.sh
           rm scripts/.build_ux_preview.sh
-      - name: Verify actual settings round-trip, task switching eligibility, copy and native notch sizes
+      - name: Verify actual settings round-trip, cross-process activation, copy and native notch sizes
         run: |
           python3 - <<'PY'
           import os,json,subprocess,time
@@ -90,13 +77,15 @@ jobs:
           binary=Path(os.environ['RUNNER_TEMP'])/'ToolIsleGiteeFix/ToolIsle.app/Contents/MacOS/ToolIsle'
           result=out/'ux-runtime.json'
           env=os.environ.copy();env['TOOLISLE_GITEE_UX_RESULT']=str(result)
+          env['TOOLISLE_GITEE_FOCUS_DRIVER']=str(Path(os.environ['RUNNER_TEMP'])/'GiteeActivationDriver')
           with (out/'ux-runtime.log').open('w') as log:
               p=subprocess.Popen([str(binary),'--gitee-reader-demo','--gitee-ux-probe'],env=env,stdout=log,stderr=subprocess.STDOUT)
               try:
-                  for _ in range(100):
+                  for _ in range(120):
                       if result.exists() or p.poll() is not None:break
                       time.sleep(1)
                   subprocess.run(['/usr/sbin/screencapture','-x',str(out/'ux-final-desktop.png')],check=False)
+                  print((out/'ux-runtime.log').read_text())
                   assert result.exists(),'runtime probe missing; inspect log and screenshot'
                   data=json.loads(result.read_text());print(json.dumps(data,ensure_ascii=False,indent=2))
                   assert data['passed'],data
