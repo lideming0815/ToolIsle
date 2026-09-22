@@ -8,6 +8,7 @@ import SwiftUI
 struct GIDedicatedSettingsView: View {
     @ObservedObject private var store = GIStore.shared
     @Default(.enableGiteeReader) private var enabled
+    @Default(.giteeNotchMaximumItems) private var notchMaximumItems
     @State private var source = "subscriptions"
     @State private var filter = ""
     @State private var changeToken = false
@@ -26,6 +27,15 @@ struct GIDedicatedSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             } header: { Text("Gitee") }
             if enabled {
+                Section("刘海预览") {
+                    Stepper(value: Binding(get: { GINotchMetrics.clamp(notchMaximumItems) }, set: {
+                        GINotchLayout.shared.setMaximumItems($0)
+                    }), in: 1...10) {
+                        LabeledContent("最多显示条数", value: "\(GINotchMetrics.clamp(notchMaximumItems)) 条")
+                    }.accessibilityIdentifier("gitee-notch-maximum-items")
+                    Text("默认 8 条，可设置 1–10 条。高度随筛选结果调整；屏幕空间不足时列表滚动。此限制不影响接口分页或阅读窗口。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("账户") {
                     if let account = store.account {
                         LabeledContent("当前账户", value: account.displayName)

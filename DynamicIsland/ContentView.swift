@@ -42,6 +42,7 @@ struct ContentView: View {
     @EnvironmentObject var vm: DynamicIslandViewModel
     @EnvironmentObject var webcamManager: WebcamManager
 
+    @ObservedObject private var giteeNotchLayout = GINotchLayout.shared
     @ObservedObject var coordinator = DynamicIslandViewCoordinator.shared
     @ObservedObject var musicManager = MusicManager.shared
     @ObservedObject var timerManager = TimerManager.shared
@@ -186,7 +187,7 @@ struct ContentView: View {
         }
         
         if coordinator.currentView == .giteeIssues {
-            return CGSize(width: baseSize.width, height: max(baseSize.height, 250))
+            return giteeNotchLayout.size(base: baseSize, screenName: vm.screen)
         }
 
         if coordinator.currentView == .timer {
@@ -832,7 +833,8 @@ struct ContentView: View {
                     }
                 }
             }
-            .onChange(of: coordinator.currentView) { _, newValue in
+            .onChange(of: coordinator.currentView) { oldValue, newValue in
+                vm.refreshGiteeNotchSize(leavingGitee: oldValue == .giteeIssues)
                 if enableStatsFeature {
                     let currentViewString = newValue == .stats ? "stats" : "other"
                     statsManager.updateMonitoringState(
@@ -1309,7 +1311,7 @@ struct ContentView: View {
                             case .terminal:
                                 NotchTerminalView()
                             case .giteeIssues:
-                                GINotchView()
+                                GINotchView(screenName: vm.screen)
                             case .extensionExperience:
                                 if let payload = currentExtensionTabPayload() {
                                     ExtensionNotchExperienceTabView(payload: payload)

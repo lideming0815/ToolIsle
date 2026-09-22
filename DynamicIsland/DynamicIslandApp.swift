@@ -157,6 +157,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         installTopMenuItemsIfNeeded()
+        GIReaderSession.shared.applicationBecameActive()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        !GIReaderSession.shared.reopen()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -567,7 +572,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Clipboard has its own fixed height source; don't inherit the notes layout state.
             baseSize.height = max(baseSize.height, NotesLayoutState.list.preferredHeight)
         } else if coordinator.currentView == .giteeIssues {
-            baseSize.height = max(baseSize.height, 250)
+            baseSize = GINotchLayout.shared.size(base: baseSize, screenName: vm.screen)
         } else if coordinator.currentView == .terminal {
             let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
             let maxFraction = Defaults[.terminalMaxHeightFraction]
@@ -629,6 +634,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Adds Dynamic Island shadow/top insets on non-notch screens, or top bleed on physical-notch screens.
     private func adjustedSizeForScreen(_ baseSize: CGSize, screen: NSScreen) -> CGSize {
         var adjusted = baseSize
+        if coordinator.currentView == .giteeIssues && !Defaults[.enableMinimalisticUI] {
+            let model = viewModels[screen] ?? vm
+            if model.notchState == .open {
+                model.refreshGiteeNotchSize()
+                adjusted = addShadowPadding(to: GINotchLayout.shared.size(base: openNotchSize, screen: screen), isMinimalistic: false)
+            }
+        }
         if shouldUseDynamicIslandMode(for: screen.localizedName) {
             adjusted.width += dynamicIslandShadowInset * 2
             adjusted.height += dynamicIslandTopOffset
@@ -695,6 +707,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 GIStore.shared.startDemo()
                 GIReaderWindowController.shared.show()
                 GINotchPreviewProbe.run(app: self)
+                GIUXProbe.run(app: self)
             }
         }
         let userInfo: [String: Any] = [
@@ -808,6 +821,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateWindowSizeForTabSwitch()
             }
         }.store(in: &cancellables)
+
+        GINotchLayout.shared.$metrics.dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.coordinator.currentView == .giteeIssues else { return }
+                self.vm.refreshGiteeNotchSize()
+                self.viewModels.values.forEach { $0.refreshGiteeNotchSize() }
+                self.updateWindowSizeIfNeeded()
+            }.store(in: &cancellables)
 
         networkConnectivityManager.$hudState
             .removeDuplicates()
@@ -1654,9 +1675,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.contentView = NSHostingView(rootView: OnboardingView(
                 onFinish: {
                     window.orderOut(nil)
-                    NSApp.setActivationPolicy(.accessory)
+                    GIReaderSession.shared.restorePolicy(excluding: window)
                     window.close()
-                    NSApp.deactivate()
+                    if !GIReaderSession.shared.isOpen { NSApp.deactivate() }
                 },
                 onOpenSettings: {
                     window.close()
