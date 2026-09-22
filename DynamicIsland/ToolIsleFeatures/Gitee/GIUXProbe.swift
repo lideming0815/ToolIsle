@@ -56,7 +56,7 @@ enum GIUXProbe {
                 try check(info["target_active"] as? Bool == true && NSApp.isActive, "cross-process activation returns to application")
                 await pause(0.4)
             }
-            func snapshot(_ stage: String) {
+            @MainActor func snapshot(_ stage: String) {
                 let windows: [[String: Any]] = NSApp.windows.map { window in
                     ["class": String(describing: type(of: window)), "title": window.title,
                      "identifier": window.identifier?.rawValue ?? "", "visible": window.isVisible,

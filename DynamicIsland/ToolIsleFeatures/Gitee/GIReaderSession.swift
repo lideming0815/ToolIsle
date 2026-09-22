@@ -37,7 +37,11 @@ final class GIReaderSession {
             window !== closing && window !== reader && Self.isDocument(window) &&
             (window.isVisible || window.isMiniaturized)
         }
-        applyPolicy(isOpen || otherDocument ? .regular : .accessory)
+        let requiresForeground = isOpen || otherDocument
+        applyPolicy(requiresForeground ? .regular : .accessory)
+        // Preserve Atoll's original last-window handoff without deactivating
+        // an open (including minimized or hidden) reader or another document.
+        if !requiresForeground && NSApp.isActive { NSApp.deactivate() }
     }
     func settingsClosed(_ settings: NSWindow?) {
         restorePolicy(excluding: settings)
