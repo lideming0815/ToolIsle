@@ -61,6 +61,11 @@ enum GIUXProbe {
                     ["class": String(describing: type(of: window)), "title": window.title,
                      "identifier": window.identifier?.rawValue ?? "", "visible": window.isVisible,
                      "minimized": window.isMiniaturized, "key": window.isKeyWindow,
+                     "can_become_main": window.canBecomeMain, "excluded_from_menu": window.isExcludedFromWindowsMenu,
+                     "ignores_mouse": window.ignoresMouseEvents, "alpha": window.alphaValue,
+                     "frame": NSStringFromRect(window.frame), "content_rect": NSStringFromRect(window.contentLayoutRect),
+                     "content_view": window.contentView.map { String(describing: type(of: $0)) } ?? "nil",
+                     "accessibility_subrole": String(describing: window.accessibilitySubrole()),
                      "normal_document": window.styleMask.contains(.titled) && !(window is NSPanel) && window.level == .normal]
                 }
                 windowSnapshots.append(["stage": stage, "reader_open": GIReaderSession.shared.isOpen,

@@ -99,6 +99,14 @@ final class GIReaderSession {
         if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
     private static func isDocument(_ window: NSWindow) -> Bool {
-        window.styleMask.contains(.titled) && !(window is NSPanel) && window.level == .normal
+        // AppKit/SwiftUI can retain ordered-in helper windows after a menu or
+        // activation transition. Their isVisible flag alone does not make them
+        // user-facing documents that should keep a menu-bar app in the Dock.
+        guard window.styleMask.contains(.titled), !(window is NSPanel),
+              window.level == .normal, window.canBecomeMain,
+              !window.isExcludedFromWindowsMenu, !window.ignoresMouseEvents,
+              window.alphaValue > 0, window.contentView != nil else { return false }
+        let content = window.contentLayoutRect
+        return content.width > 1 && content.height > 1
     }
 }
