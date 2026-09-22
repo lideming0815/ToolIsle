@@ -1,3 +1,5 @@
+> **ToolIsle：Atoll 原版基线验证版。** 仅替换提供的 Logo 并增加文档及打包验证；保留原版功能、入口和配置。基线与使用注意见 [TOOLISLE.md](TOOLISLE.md)。
+
 <p align="center">
   <img src=".github/assets/atoll-logo.png" alt="Atoll logo" width="120">
 </p>
