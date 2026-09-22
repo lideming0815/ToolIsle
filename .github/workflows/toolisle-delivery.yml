@@ -11,63 +11,44 @@ concurrency:
   group: toolisle-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      revision: ${{ steps.revision.outputs.sha }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-      - name: Apply verified finalization patch on feature branch only
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feat/toolisle-foundation'
-        run: |
-          if [ -f scripts/toolisle-hardening.patch ]; then
-            git apply --check scripts/toolisle-hardening.patch
-            git apply scripts/toolisle-hardening.patch
-            rm scripts/toolisle-hardening.patch
-            git diff --check
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add ToolIsle scripts/toolisle-hardening.patch
-            git commit -m 'fix: isolate in-flight account requests and document resource refs'
-            git push origin HEAD:feat/toolisle-foundation
-          fi
-      - id: revision
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - run: git archive --format=tar.gz -o /tmp/ToolIsle-source.tar.gz HEAD
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ToolIsle-source
-          path: /tmp/ToolIsle-source.tar.gz
-          retention-days: 14
   core-tests:
-    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.revision }}
           persist-credentials: false
       - run: swift --version && swift test
   macos-build:
-    needs: prepare
     runs-on: macos-15
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.revision }}
           persist-credentials: false
       - run: xcodebuild -version && swift --version
-      - name: Test and package
+      - name: Test and package locked dependencies
         run: |
           set -o pipefail
-          swift test 2>&1 | tee /tmp/toolisle-tests.log
+          swift test --force-resolved-versions 2>&1 | tee /tmp/toolisle-tests.log
           bash scripts/build-toolisle.sh release 2>&1 | tee /tmp/toolisle-build.log
+      - name: Verify packaged app starts without credentials
+        run: |
+          APP="$PWD/dist/ToolIsle.app/Contents/MacOS/ToolIsle"
+          "$APP" > /tmp/toolisle-launch.log 2>&1 &
+          PID=$!
+          trap 'kill "$PID" 2>/dev/null || true' EXIT
+          sleep 6
+          if ! kill -0 "$PID" 2>/dev/null; then
+            cat /tmp/toolisle-launch.log
+            echo 'Packaged application exited unexpectedly.' >&2
+            exit 1
+          fi
+          echo 'Packaged ToolIsle process remained alive for startup smoke test.'
+      - name: Package corresponding source
+        run: |
+          git diff --check
+          git archive --format=tar.gz -o /tmp/ToolIsle-source.tar.gz HEAD
+          git rev-parse HEAD > /tmp/toolisle-revision.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -75,11 +56,19 @@ jobs:
           path: |
             /tmp/toolisle-tests.log
             /tmp/toolisle-build.log
+            /tmp/toolisle-launch.log
+            /tmp/toolisle-revision.txt
             Package.resolved
           retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: ToolIsle-macOS
           path: dist/ToolIsle-*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ToolIsle-source
+          path: /tmp/ToolIsle-source.tar.gz
           if-no-files-found: error
           retention-days: 14

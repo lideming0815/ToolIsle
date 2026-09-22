@@ -81,6 +81,13 @@ enum TokenVault {
             user = profile; client = candidate; message = cacheWarning
         } catch {
             guard version == generation else { return }
+            // A known-revoked saved credential must not unlock an old offline profile later.
+            if restoring, error as? GiteeError == .unauthorized {
+                try? await candidate.invalidate()
+                await disconnect()
+                if message == nil { message = GiteeError.unauthorized.localizedDescription }
+                return
+            }
             if restoring, diskCache, let network = error as? URLError,
                [.notConnectedToInternet, .timedOut, .cannotConnectToHost, .cannotFindHost, .networkConnectionLost].contains(network.code),
                let data = UserDefaults.standard.data(forKey: "gitee.profile"), let profile = try? JSONDecoder().decode(GiteeUser.self, from: data) {
@@ -98,7 +105,7 @@ enum TokenVault {
         do {
             if !enabled { try await client.clearCache() }
             try await client.configureDiskCache(directory: enabled ? cacheDirectory : nil, accountID: user.id)
-        } catch { message = "缓存设置失败：" + error.localizedDescription }
+        } catch { report(error, from: client) }
     }
     func disconnect() async {
         let version = UUID(); generation = version; busy = true
