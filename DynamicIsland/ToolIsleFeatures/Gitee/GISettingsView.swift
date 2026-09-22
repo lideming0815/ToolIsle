@@ -29,7 +29,7 @@ struct GIDedicatedSettingsView: View {
             if enabled {
                 Section("刘海预览") {
                     Stepper(value: Binding(get: { GINotchMetrics.clamp(notchMaximumItems) }, set: {
-                        notchMaximumItems = GINotchMetrics.clamp($0); GINotchLayout.shared.refreshNow()
+                        GINotchLayout.shared.setMaximumItems($0)
                     }), in: 1...10) {
                         LabeledContent("最多显示条数", value: "\(GINotchMetrics.clamp(notchMaximumItems)) 条")
                     }.accessibilityIdentifier("gitee-notch-maximum-items")

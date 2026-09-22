@@ -27,6 +27,7 @@ import Sparkle
 class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
     private var updaterController: SPUStandardUpdaterController?
+    private var isClosing = false
     
     private init() {
         let window = NSWindow(
@@ -84,6 +85,7 @@ class SettingsWindowController: NSWindowController {
     }
     
     func showWindow() {
+        isClosing = false
         // Ensure window exists
         _ = window
 
@@ -109,7 +111,8 @@ class SettingsWindowController: NSWindowController {
         
         // Force window to front after activation
         DispatchQueue.main.async { [weak self] in
-            self?.window?.makeKeyAndOrderFront(nil)
+            guard let self, !self.isClosing else { return }
+            self.window?.makeKeyAndOrderFront(nil)
         }
     }
     
@@ -119,6 +122,7 @@ class SettingsWindowController: NSWindowController {
     }
     
     private func relinquishFocus() {
+        isClosing = true
         window?.orderOut(nil)
         
         // A still-open Gitee reader remains a normal switchable application window.
@@ -143,7 +147,7 @@ extension SettingsWindowController: NSWindowDelegate {
     
     func windowDidBecomeKey(_ notification: Notification) {
         // Ensure app is in regular mode when window becomes key
-        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+        if !isClosing && NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
     }
     
     func windowDidResignKey(_ notification: Notification) {

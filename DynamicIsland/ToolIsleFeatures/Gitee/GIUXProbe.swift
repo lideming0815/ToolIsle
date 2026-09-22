@@ -13,6 +13,7 @@ enum GIUXProbe {
             var failures: [String] = []
             var sizes: [[String: Any]] = []
             var activations: [[String: Any]] = []
+            var windowSnapshots: [[String: Any]] = []
             let result = URL(fileURLWithPath: output)
             func check(_ condition: Bool, _ name: String) throws {
                 FileHandle.standardError.write(Data(("GIUX: " + (condition ? "PASS " : "FAIL ") + name + "\n").utf8))
@@ -55,6 +56,17 @@ enum GIUXProbe {
                 try check(info["target_active"] as? Bool == true && NSApp.isActive, "cross-process activation returns to application")
                 await pause(0.4)
             }
+            func snapshot(_ stage: String) {
+                let windows: [[String: Any]] = NSApp.windows.map { window in
+                    ["class": String(describing: type(of: window)), "title": window.title,
+                     "identifier": window.identifier?.rawValue ?? "", "visible": window.isVisible,
+                     "minimized": window.isMiniaturized, "key": window.isKeyWindow,
+                     "normal_document": window.styleMask.contains(.titled) && !(window is NSPanel) && window.level == .normal]
+                }
+                windowSnapshots.append(["stage": stage, "reader_open": GIReaderSession.shared.isOpen,
+                                        "activation_policy": NSApp.activationPolicy().rawValue, "windows": windows,
+                                        "stored_limit": Defaults[.giteeNotchMaximumItems], "layout_limit": GINotchLayout.shared.metrics.limit])
+            }
             func capture(_ window: NSWindow, _ name: String) {
                 let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
                 process.arguments = ["-x", "-o", "-l", String(window.windowNumber), result.deletingLastPathComponent().appendingPathComponent(name + ".png").path]
@@ -64,7 +76,8 @@ enum GIUXProbe {
                 let reader = GIReaderWindowController.shared
                 guard let window = reader.window else { throw NSError(domain: "missing-reader", code: 1) }
                 // The ephemeral runner may show its first-run onboarding; hide only in this explicit probe.
-                for other in NSApp.windows where other.identifier?.rawValue == "OnboardingWindow" { other.orderOut(nil) }
+                DynamicIslandViewCoordinator.shared.firstLaunch = false
+                for other in NSApp.windows where other.identifier?.rawValue == "OnboardingWindow" { other.close() }
                 let store = GIStore.shared
                 let selected = store.selectedListID
                 let visit = store.visit?.id
@@ -105,7 +118,7 @@ enum GIUXProbe {
                           "clear filters keeps reading history/selection")
 
                 let layout = GINotchLayout.shared
-                Defaults[.giteeNotchMaximumItems] = 8
+                GINotchLayout.shared.setMaximumItems(8)
                 let coordinator = DynamicIslandViewCoordinator.shared
                 coordinator.firstLaunch = false; coordinator.alwaysShowTabs = true
                 Defaults[.enableMinimalisticUI] = false
@@ -128,8 +141,9 @@ enum GIUXProbe {
                 }
                 try check((sizes[3]["windowHeight"] as! CGFloat) > (sizes[1]["windowHeight"] as! CGFloat), "native notch grows from 1 to 8 rows")
                 try check(sizes[3]["windowHeight"] as! CGFloat == sizes[4]["windowHeight"] as! CGFloat, "more than 8 does not expand past preview cap")
-                Defaults[.giteeNotchMaximumItems] = 10; await pause(0.8)
-                try check(layout.metrics.limit == 10 && layout.metrics.visibleCount == 10, "settings limit changes immediately to ten")
+                GINotchLayout.shared.setMaximumItems(10); await pause(0.8)
+                snapshot("setting-ten")
+                try check(Defaults[.giteeNotchMaximumItems] == 10 && layout.metrics.limit == 10 && layout.metrics.visibleCount == 10, "settings limit changes immediately to ten")
                 capture(notch, "ux-notch-10")
                 let expandedGiteeHeight = notch.frame.height
                 coordinator.currentView = .home; await pause(0.8)
@@ -140,7 +154,7 @@ enum GIUXProbe {
                 coordinator.currentView = .giteeIssues; await pause(0.8)
                 try check(abs(notch.frame.height - expandedGiteeHeight) < 1, "returning to Gitee restores adaptive height")
                 store.query = "fixture-no-match"; await pause(0.8); capture(notch, "ux-notch-empty")
-                store.clearFilters(); Defaults[.giteeNotchMaximumItems] = 8; await pause()
+                store.clearFilters(); GINotchLayout.shared.setMaximumItems(8); await pause()
                 NSApp.appearance = NSAppearance(named: .aqua); capture(notch, "ux-notch-light")
                 NSApp.appearance = NSAppearance(named: .darkAqua); capture(notch, "ux-notch-dark")
                 NSApp.appearance = nil
@@ -154,16 +168,18 @@ enum GIUXProbe {
                 window.performClose(nil); await pause()
                 try check(!GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .regular, "reader close preserves still-open settings")
                 SettingsWindowController.shared.window?.performClose(nil); await pause()
+                snapshot("last-document-closed")
                 try check(!GIReaderSession.shared.isOpen && !window.isVisible && NSApp.activationPolicy() == .accessory,
                           "last document close returns to original accessory mode without resurrecting reader")
                 SettingsWindowController.shared.showWindow(); await pause()
                 SettingsWindowController.shared.window?.performClose(nil); await pause()
+                snapshot("settings-only-closed")
                 try check(!window.isVisible && NSApp.activationPolicy() == .accessory, "settings-only use does not reopen reader")
-                let info: [String: Any] = ["passed": failures.isEmpty, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations, "accessibilitySubrole": subrole,
+                let info: [String: Any] = ["passed": failures.isEmpty, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations, "window_snapshots": windowSnapshots, "accessibilitySubrole": subrole,
                     "synthetic_data": true, "live_gitee_tested": false, "third_party_alttab_hotkey_tested": false]
                 try JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]).write(to: result)
             } catch {
-                let info: [String: Any] = ["passed": false, "error": error.localizedDescription, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations]
+                let info: [String: Any] = ["passed": false, "error": error.localizedDescription, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations, "window_snapshots": windowSnapshots]
                 try? JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]).write(to: result)
             }
         }

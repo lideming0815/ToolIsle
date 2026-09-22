@@ -24,6 +24,11 @@ final class GIReaderSession {
         restoreGeneration += 1
         reopenPending = false
         restorePolicy(excluding: window)
+        let generation = restoreGeneration
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, generation == self.restoreGeneration, !self.isOpen else { return }
+            self.restorePolicy(excluding: window)
+        }
     }
     /// Settings/onboarding/modal helpers must not hide a still-open reading session
     /// from Cmd-Tab. Minimized or app-hidden readers still own this lifetime.
@@ -41,8 +46,10 @@ final class GIReaderSession {
         let userIsInApplication = NSApp.isActive
         // willClose fires before AppKit finishes ordering. Revalidate on the next turn.
         DispatchQueue.main.async { [weak self, weak settings] in
-            guard let self, generation == self.restoreGeneration, userIsInApplication,
-                  NSApp.isActive, self.isOpen, let window = self.reader,
+            guard let self, generation == self.restoreGeneration else { return }
+            // Reconcile after willClose and any final key-window callbacks finish.
+            self.restorePolicy(excluding: settings)
+            guard userIsInApplication, NSApp.isActive, self.isOpen, let window = self.reader,
                   window.isVisible, !window.isMiniaturized else { return }
             if let key = NSApp.keyWindow, key !== settings, key !== window, Self.isDocument(key) { return }
             self.focus(window, restoreMinimized: false)
