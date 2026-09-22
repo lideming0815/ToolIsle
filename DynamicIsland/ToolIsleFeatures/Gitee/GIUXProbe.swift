@@ -12,19 +12,46 @@ enum GIUXProbe {
             var checks: [String] = []
             var failures: [String] = []
             var sizes: [[String: Any]] = []
+            var activations: [[String: Any]] = []
             let result = URL(fileURLWithPath: output)
             func check(_ condition: Bool, _ name: String) throws {
+                FileHandle.standardError.write(Data(("GIUX: " + (condition ? "PASS " : "FAIL ") + name + "\n").utf8))
                 guard condition else { failures.append(name); return }
                 checks.append(name)
             }
             func pause(_ seconds: Double = 0.5) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
             func requestUserReactivation() async throws {
-                // Exercise LaunchServices activation, not forbidden background focus stealing.
-                let config = NSWorkspace.OpenConfiguration()
-                config.activates = true
-                config.createsNewApplicationInstance = false
-                _ = try await NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config)
-                await pause(0.8)
+                guard let executable = ProcessInfo.processInfo.environment["TOOLISLE_GITEE_FOCUS_DRIVER"] else {
+                    throw NSError(domain: "missing-focus-driver", code: 3)
+                }
+                let path = result.deletingLastPathComponent().appendingPathComponent("ux-activation-\(activations.count).json")
+                let ready = path.appendingPathExtension("ready")
+                let driver = Process()
+                driver.executableURL = URL(fileURLWithPath: executable)
+                driver.arguments = [String(ProcessInfo.processInfo.processIdentifier), path.path]
+                try driver.run()
+                defer { if driver.isRunning { driver.terminate() } }
+                for _ in 0..<40 {
+                    if let text = try? String(contentsOf: ready, encoding: .utf8), let pid = Int32(text),
+                       let external = NSRunningApplication(processIdentifier: pid) {
+                        if NSApp.isActive { NSApp.yieldActivation(to: external) }
+                        external.activate(options: [.activateAllWindows])
+                        break
+                    }
+                    await pause(0.1)
+                }
+                for _ in 0..<140 {
+                    if FileManager.default.fileExists(atPath: path.path) { break }
+                    await pause(0.1)
+                }
+                guard let data = try? Data(contentsOf: path),
+                      let info = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw NSError(domain: "focus-driver-timeout", code: 4)
+                }
+                activations.append(info)
+                try check(info["external_application_active"] as? Bool == true, "external driver actually becomes foreground")
+                try check(info["target_active"] as? Bool == true && NSApp.isActive, "cross-process activation returns to application")
+                await pause(0.4)
             }
             func capture(_ window: NSWindow, _ name: String) {
                 let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -56,12 +83,9 @@ enum GIUXProbe {
                     try check(window.isKeyWindow && NSApp.activationPolicy() == .regular, "closing settings returns to reader round \(round)")
                 }
                 try check(store.selectedListID == selected && store.visit?.id == visit, "settings round trip preserves Issue/history selection")
-                if let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first {
-                    finder.activate(options: [.activateAllWindows]); await pause()
-                    try check(!NSApp.isActive && window.isVisible, "external application activation does not hide reader")
-                    try await requestUserReactivation()
-                    try check(window.isKeyWindow && NSApp.activationPolicy() == .regular, "reactivation restores reader")
-                }
+                try await requestUserReactivation()
+                try check(window.isVisible && window.isKeyWindow && NSApp.activationPolicy() == .regular,
+                          "return from external application restores reader")
                 NSApp.hide(nil); await pause()
                 try check(GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .regular, "Cmd-H lifetime remains switchable")
                 NSApp.unhide(nil); try await requestUserReactivation()
@@ -124,11 +148,11 @@ enum GIUXProbe {
                 SettingsWindowController.shared.showWindow(); await pause()
                 SettingsWindowController.shared.window?.performClose(nil); await pause()
                 try check(!window.isVisible && NSApp.activationPolicy() == .accessory, "settings-only use does not reopen reader")
-                let info: [String: Any] = ["passed": failures.isEmpty, "checks": checks, "failures": failures, "sizes": sizes, "accessibilitySubrole": subrole,
+                let info: [String: Any] = ["passed": failures.isEmpty, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations, "accessibilitySubrole": subrole,
                     "synthetic_data": true, "live_gitee_tested": false, "third_party_alttab_hotkey_tested": false]
                 try JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]).write(to: result)
             } catch {
-                let info: [String: Any] = ["passed": false, "error": error.localizedDescription, "checks": checks, "failures": failures, "sizes": sizes]
+                let info: [String: Any] = ["passed": false, "error": error.localizedDescription, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations]
                 try? JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]).write(to: result)
             }
         }
