@@ -139,6 +139,7 @@ public actor GiteeClient {
     private var cache: [String: Entry] = [:]
     private var cacheURL: URL?
     private var blockedUntil: Date?
+    private var active = true
     public init(token: String, transport: any GiteeTransport = GiteeNetwork()) {
         self.token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         self.transport = transport
@@ -146,6 +147,7 @@ public actor GiteeClient {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
     }
     public func configureDiskCache(directory: URL?, accountID: Int) throws {
+        guard active else { throw GiteeError.unauthorized }
         cache.removeAll()
         cacheURL = nil
         guard let directory else { return }
@@ -156,6 +158,10 @@ public actor GiteeClient {
            let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder().decode([String: Entry].self, from: data) {
             cache = decoded.filter { Date().timeIntervalSince($0.value.savedAt) < 7 * 86_400 }
         }
+    }
+    public func invalidate() throws {
+        active = false
+        try clearCache()
     }
     public func clearCache() throws {
         cache.removeAll()
@@ -196,6 +202,7 @@ public actor GiteeClient {
     }
     private func load<T: Decodable & Sendable>(_ path: [String], query: [URLQueryItem] = [], allowOffline: Bool = true) async throws -> GiteeResource<T> {
         try Task.checkCancellation()
+        guard active else { throw GiteeError.unauthorized }
         if let until = blockedUntil, until > Date() { throw GiteeError.rateLimited(Int(ceil(until.timeIntervalSinceNow))) }
         let url = try GiteePath.url(path, query: query)
         var request = URLRequest(url: url)
@@ -207,6 +214,7 @@ public actor GiteeClient {
         do {
             let (body, response) = try await transport.send(request)
             try Task.checkCancellation()
+            guard active else { throw GiteeError.unauthorized }
             switch response.statusCode {
             case 200: break
             case 401: try? clearCache(); throw GiteeError.unauthorized
@@ -222,6 +230,7 @@ public actor GiteeClient {
             data = body
         } catch let error as URLError {
             try Task.checkCancellation()
+            guard active else { throw GiteeError.unauthorized }
             // Never substitute cached data for authentication/authorization errors or cancellation.
             let recoverable: [URLError.Code] = [.notConnectedToInternet, .networkConnectionLost, .timedOut, .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed]
             if allowOffline, recoverable.contains(error.code), let entry = cache[url.absoluteString],

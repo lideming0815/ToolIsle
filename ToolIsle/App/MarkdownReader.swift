@@ -69,7 +69,7 @@ struct SafeMarkdownImage: View {
         Group {
             if let image { Image(nsImage: image).resizable().scaledToFit() }
             else { Label(message, systemImage: "photo").font(.caption).foregroundStyle(.secondary) }
-        }.task(id: "\(url?.absoluteString ?? "")/\(allowExternal)") { await load() }
+        }.task(id: "\(url?.absoluteString ?? "")/\(allowExternal)/\(context.ref)/\(context.localRoot?.path ?? "")") { await load() }
     }
     private func load() async {
         image = nil

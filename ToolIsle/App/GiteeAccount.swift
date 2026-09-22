@@ -67,12 +67,18 @@ enum TokenVault {
             let profile = try await candidate.user()
             try Task.checkCancellation()
             guard version == generation else { return }
-            // Validate first. A failed login never replaces a working Keychain credential.
+            // Finish all suspension points before atomically storing the validated identity.
+            var cacheWarning: String?
+            do { try await candidate.configureDiskCache(directory: diskCache ? cacheDirectory : nil, accountID: profile.id) }
+            catch {
+                try? await candidate.configureDiskCache(directory: nil, accountID: profile.id)
+                cacheWarning = "已连接，但磁盘缓存不可用：" + error.localizedDescription
+            }
+            try Task.checkCancellation()
+            guard version == generation else { try? await candidate.invalidate(); return }
             try TokenVault.save(token)
-            try await candidate.configureDiskCache(directory: diskCache ? cacheDirectory : nil, accountID: profile.id)
-            guard version == generation else { return }
-            user = profile; client = candidate
             if let data = try? JSONEncoder().encode(profile) { UserDefaults.standard.set(data, forKey: "gitee.profile") }
+            user = profile; client = candidate; message = cacheWarning
         } catch {
             guard version == generation else { return }
             if restoring, diskCache, let network = error as? URLError,
@@ -80,6 +86,7 @@ enum TokenVault {
                let data = UserDefaults.standard.data(forKey: "gitee.profile"), let profile = try? JSONDecoder().decode(GiteeUser.self, from: data) {
                 do {
                     try await candidate.configureDiskCache(directory: cacheDirectory, accountID: profile.id)
+                    guard version == generation else { try? await candidate.invalidate(); return }
                     user = profile; client = candidate; message = "当前离线，仅可查看此前缓存的内容；权限状态尚未重新验证。"
                 } catch { message = error.localizedDescription }
             } else if !(error is CancellationError) { message = error.localizedDescription }
@@ -94,22 +101,31 @@ enum TokenVault {
         } catch { message = "缓存设置失败：" + error.localizedDescription }
     }
     func disconnect() async {
-        generation = UUID(); busy = false
+        let version = UUID(); generation = version; busy = true
         let oldClient = client; client = nil; user = nil
         UserDefaults.standard.removeObject(forKey: "gitee.profile")
         UserDefaults.standard.removeObject(forKey: "gitee.lastRead")
+        var failures: [String] = []
+        do { try TokenVault.delete() } catch { failures.append(error.localizedDescription) }
+        do { try await oldClient?.invalidate() } catch { failures.append(error.localizedDescription) }
         do {
-            try TokenVault.delete()
-            try await oldClient?.clearCache()
             if FileManager.default.fileExists(atPath: cacheDirectory.path) { try FileManager.default.removeItem(at: cacheDirectory) }
-            message = nil
-        } catch { message = "已退出界面，但凭据或缓存清理失败，请重试退出：" + error.localizedDescription }
+        } catch { failures.append(error.localizedDescription) }
+        guard version == generation else { return }
+        busy = false
+        message = failures.isEmpty ? nil : "已退出界面，但部分凭据或缓存清理失败，请重试退出：" + failures.joined(separator: "；")
     }
-    func report(_ error: Error) {
+    func report(_ error: Error, from requester: GiteeClient? = nil) {
+        if let requester, client !== requester { return }
         if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
         message = error.localizedDescription
         if error as? GiteeError == .unauthorized {
-            Task { await disconnect(); message = GiteeError.unauthorized.localizedDescription }
+            let version = generation
+            Task {
+                guard version == generation else { return }
+                await disconnect()
+                if message == nil { message = GiteeError.unauthorized.localizedDescription }
+            }
         }
     }
 }
@@ -134,7 +150,7 @@ struct GiteeConnectionView: View {
                 Toggle("保存离线缓存", isOn: Binding(get: { account.diskCache }, set: { value in Task { await account.setDiskCache(value) } }))
                 Text("默认关闭磁盘缓存；开启后以当前账户隔离保存最多 7 天，文件权限仅限当前系统用户。缓存不是加密文件；退出账户会删除。")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("清除已保存的连接和缓存") { Task { await account.disconnect() } }
+                Button("清除已保存的连接和缓存") { Task { await account.disconnect() } }.disabled(account.busy)
             }
             if let message = account.message { Text(message).foregroundStyle(.orange).textSelection(.enabled) }
         }.formStyle(.grouped).frame(maxWidth: 760)

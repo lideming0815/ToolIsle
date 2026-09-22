@@ -82,6 +82,15 @@ final class CoreTests: XCTestCase {
         }
         let count = await transport.requests.count; XCTAssertEqual(count, 1)
     }
+    func testInvalidatedClientNeverSendsAnotherRequest() async throws {
+        let transport = MockTransport([.data("[]", 200, [:])])
+        let client = GiteeClient(token: "fixture", transport: transport)
+        _ = try await client.repositories(.starred, page: 1)
+        try await client.invalidate()
+        do { _ = try await client.repositories(.starred, page: 1); XCTFail("signed-out clients must not send requests") }
+        catch { XCTAssertEqual(error as? GiteeError, .unauthorized) }
+        let count = await transport.requests.count; XCTAssertEqual(count, 1)
+    }
     func testMalformedJSON() async throws {
         let client = GiteeClient(token: "fixture", transport: MockTransport([.data("<html>error</html>", 200, [:])]))
         do { _ = try await client.user(); XCTFail("must fail") } catch { XCTAssertEqual(error as? GiteeError, .invalidResponse) }

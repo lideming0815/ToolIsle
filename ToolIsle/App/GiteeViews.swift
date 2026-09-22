@@ -17,7 +17,7 @@ struct GiteeWorkspace: View {
             if let client = account.client, let user = account.user {
                 NavigationSplitView {
                     VStack(spacing: 8) {
-                        Picker("项目来源", selection: $source) { Text("Watch").tag(RepositorySource.subscriptions); Text("Star").tag(RepositorySource.starred) }.pickerStyle(.segmented)
+                        Picker("项目来源", selection: $source) { Text("Watch").tag(RepositorySource.subscriptions); Text("Star").tag(RepositorySource.starred) }.pickerStyle(.segmented).disabled(loading)
                         TextField("筛选已加载的仓库", text: $query).textFieldStyle(.roundedBorder)
                         List(selection: $selection) {
                             ForEach(repos.filter { query.isEmpty || $0.fullName.localizedCaseInsensitiveContains(query) }) { repo in
@@ -46,7 +46,7 @@ struct GiteeWorkspace: View {
                         } else { ContentUnavailableView("选择仓库", systemImage: "tray", description: Text("从 Watch 或 Star 项目中选择仓库，查看 Issues 和文档。")) }
                     }
                 }
-                .task(id: source) { await load(client, reset: true) }
+                .task(id: "\(source.rawValue)/\(user.id)") { await load(client, reset: true) }
                 .toolbar {
                     ToolbarItem { Menu(user.name ?? user.login) {
                         Toggle("磁盘离线缓存", isOn: Binding(get: { account.diskCache }, set: { value in Task { await account.setDiskCache(value) } }))
@@ -58,16 +58,17 @@ struct GiteeWorkspace: View {
     }
     private func load(_ client: GiteeClient, reset: Bool) async {
         let requestedSource = source
+        if !reset && loading { return }
         if reset { repos = []; selection = nil; page = 1; more = true }
         loading = true
         defer { loading = false }
         do {
             let resource = try await client.repositories(requestedSource, page: page)
             try Task.checkCancellation()
-            guard requestedSource == source else { return }
+            guard account.client === client, requestedSource == source else { return }
             let ids = Set(repos.map(\.id)); repos += resource.value.filter { !ids.contains($0.id) }
             more = resource.value.count == 100; page += 1; offline = resource.cachedAt
-        } catch { account.report(error) }
+        } catch { account.report(error, from: client) }
     }
 }
 struct CachedNotice: View {
@@ -114,7 +115,7 @@ struct IssuesBrowser: View {
             VStack {
                 Picker("状态", selection: $state) {
                     Text("全部").tag("all"); Text("待办").tag("open"); Text("进行中").tag("progressing"); Text("已关闭").tag("closed"); Text("已拒绝").tag("rejected")
-                }
+                }.disabled(loading)
                 TextField("筛选已加载标题或标签", text: $search).textFieldStyle(.roundedBorder)
                 List(selection: $selection) {
                     ForEach(issues.filter { issue in search.isEmpty || issue.title.localizedCaseInsensitiveContains(search) || (issue.labels ?? []).contains { $0.name.localizedCaseInsensitiveContains(search) } }) { issue in
@@ -148,14 +149,15 @@ struct IssuesBrowser: View {
     private func key(_ issue: GiteeIssue) -> String { "\(account.user?.id ?? 0)/\(repo.id)/\(issue.number)" }
     private func load(reset: Bool) async {
         let requestedState = state
+        if !reset && loading { return }
         if reset { page = 1; issues = []; selection = nil; more = true }
         loading = true; defer { loading = false }
         do {
             let result = try await client.issues(repo, state: requestedState, page: page)
-            try Task.checkCancellation(); guard requestedState == state else { return }
+            try Task.checkCancellation(); guard account.client === client, requestedState == state else { return }
             let ids = Set(issues.map(\.id)); issues += result.value.filter { !ids.contains($0.id) }
             more = result.value.count == 100; page += 1; offline = result.cachedAt
-        } catch { account.report(error) }
+        } catch { account.report(error, from: client) }
     }
 }
 struct IssueReader: View {
@@ -201,7 +203,7 @@ struct IssueReader: View {
             let result = try await client.issue(repo, number: number); try Task.checkCancellation()
             issue = result.value; offline = result.cachedAt; page = 1; comments = []; more = true
             await loadComments()
-        } catch { account.report(error) }
+        } catch { account.report(error, from: client) }
     }
     private func loadComments() async {
         loading = true; defer { loading = false }
@@ -210,7 +212,7 @@ struct IssueReader: View {
             let ids = Set(comments.map(\.id)); comments += result.value.filter { !ids.contains($0.id) }
             page += 1; more = result.value.count == 100
             if let cached = result.cachedAt { offline = cached }
-        } catch { account.report(error) }
+        } catch { account.report(error, from: client) }
     }
 }
 struct RepositoryFiles: View {
@@ -219,6 +221,7 @@ struct RepositoryFiles: View {
     let client: GiteeClient
     let initialPath: String?
     @State private var ref = ""
+    @State private var displayedRef = ""
     @State private var path = ""
     @State private var branches: [GiteeBranch] = []
     @State private var entries: [GiteeFile] = []
@@ -241,9 +244,9 @@ struct RepositoryFiles: View {
             if let failure { Text(failure).foregroundStyle(.orange).textSelection(.enabled).padding(.horizontal) }
             if loading { ProgressView() }
             if let file {
-                MarkdownReader(text: text, title: file.path, context: .repository(repo, client: client, ref: ref, path: file.path)) { next in
-                    path = next; Task { await openPath() }
-                }.id("\(ref)/\(file.path)")
+                MarkdownReader(text: text, title: file.path, context: .repository(repo, client: client, ref: displayedRef, path: file.path)) { next in
+                    path = next; ref = displayedRef; Task { await openPath() }
+                }.id("\(displayedRef)/\(file.path)")
             } else {
                 List(entries) { entry in
                     Button {
@@ -254,30 +257,30 @@ struct RepositoryFiles: View {
             }
         }.task {
             ref = repo.defaultBranch ?? ""
-            do { branches = try await client.branches(repo, page: 1).value } catch { account.report(error) }
+            do { branches = try await client.branches(repo, page: 1).value } catch { account.report(error, from: client) }
             if let initialPath { path = initialPath; await openPath() } else { await readme() }
         }
     }
-    private func display(_ result: GiteeResource<GiteeFile>) throws {
+    private func display(_ result: GiteeResource<GiteeFile>, ref requestedRef: String) throws {
         let rendered = try result.value.text()
-        file = result.value; path = result.value.path; text = rendered; offline = result.cachedAt
+        displayedRef = requestedRef; file = result.value; path = result.value.path; text = rendered; offline = result.cachedAt
     }
     private func readme() async {
         loading = true; failure = nil; defer { loading = false }
-        do { let result = try await client.readme(repo, ref: ref); try Task.checkCancellation(); try display(result) }
-        catch { failure = error.localizedDescription; account.report(error) }
+        do { let requestedRef = ref; let result = try await client.readme(repo, ref: requestedRef); try Task.checkCancellation(); try display(result, ref: requestedRef) }
+        catch { failure = error.localizedDescription; account.report(error, from: client) }
     }
     private func browse(_ directory: String) async {
         loading = true; failure = nil; defer { loading = false }
         do {
             let result = try await client.files(repo, path: directory, ref: ref); try Task.checkCancellation()
             file = nil; entries = result.value.sorted { ($0.type == "dir" && $1.type != "dir") || ($0.type == $1.type && $0.name.localizedStandardCompare($1.name) == .orderedAscending) }; path = directory; offline = result.cachedAt
-        } catch { failure = error.localizedDescription; account.report(error) }
+        } catch { failure = error.localizedDescription; account.report(error, from: client) }
     }
     private func openPath() async {
         if path.isEmpty { await browse(""); return }
         loading = true; failure = nil; defer { loading = false }
-        do { let result = try await client.file(repo, path: path, ref: ref); try Task.checkCancellation(); try display(result) }
-        catch { failure = error.localizedDescription; account.report(error) }
+        do { let requestedRef = ref; let result = try await client.file(repo, path: path, ref: requestedRef); try Task.checkCancellation(); try display(result, ref: requestedRef) }
+        catch { failure = error.localizedDescription; account.report(error, from: client) }
     }
 }
