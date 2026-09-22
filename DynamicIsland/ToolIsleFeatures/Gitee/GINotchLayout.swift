@@ -16,8 +16,15 @@ final class GINotchLayout: ObservableObject {
     private init() {
         // Coalesce @Published's willSet notifications; never start authentication or network work.
         GIStore.shared.objectWillChange.sink { [weak self] _ in self?.schedule() }.store(in: &subscriptions)
-        Defaults.publisher(.giteeNotchMaximumItems, options: []).receive(on: DispatchQueue.main)
+        Defaults.publisher(.giteeNotchMaximumItems).receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.schedule() }.store(in: &subscriptions)
+        refreshNow()
+    }
+    /// The Settings binding and native regression exercise the same action.
+    /// Do not rely on a delayed UserDefaults observation to resize an open notch.
+    func setMaximumItems(_ value: Int) {
+        Defaults[.giteeNotchMaximumItems] = GINotchMetrics.clamp(value)
+        pending?.cancel()
         refreshNow()
     }
     private func schedule() {
