@@ -93,7 +93,10 @@ jobs:
               env['TOOLISLE_GITEE_FOCUS_DRIVER']=str(Path(os.environ['RUNNER_TEMP'])/'GiteeActivationDriver')
               record={'launch':index,'passed':False}
               with (folder/'ux-runtime.log').open('w') as log:
-                  p=subprocess.Popen([str(binary),'--gitee-reader-demo','--gitee-ux-probe'],env=env,stdout=log,stderr=subprocess.STDOUT)
+                  # Sparkle's documented command-line test override applies only to
+                  # this process. Do not alter production defaults or hide a real
+                  # update dialog by misclassifying it as a non-document window.
+                  p=subprocess.Popen([str(binary),'--gitee-reader-demo','--gitee-ux-probe','-SUEnableAutomaticChecks','NO'],env=env,stdout=log,stderr=subprocess.STDOUT)
                   try:
                       for _ in range(150):
                           if result.exists() or p.poll() is not None:break
@@ -107,6 +110,7 @@ jobs:
                       record['checks']=len(data.get('checks',[]));record['failures']=data.get('failures',[])
                       assert data['passed'] and not data.get('failures') and record['checks']>0,data
                       assert data['synthetic_data'] and not data['live_gitee_tested'] and not data['third_party_alttab_hotkey_tested']
+                      assert data['updater_testing_argument'] and not data['automatic_update_checks_effective'],data
                       assert len(data['activation_runs'])==2,data
                       assert all(a.get('native_cmd_tab_tested') and a.get('native_cmd_tab_returned_to_reader') and not a.get('error') for a in data['activation_runs']),data['activation_runs']
                       record['passed']=True
@@ -118,7 +122,7 @@ jobs:
                           try:p.wait(timeout=10)
                           except subprocess.TimeoutExpired:p.kill();p.wait()
               runs.append(record)
-          summary={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'runs':runs,'passed':all(r['passed'] for r in runs)}
+          summary={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'updater_override':'process-only -SUEnableAutomaticChecks NO','production_updater_defaults_modified':False,'runs':runs,'passed':all(r['passed'] for r in runs)}
           (out/'ux-runtime-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
           assert summary['passed'],summary
           PY

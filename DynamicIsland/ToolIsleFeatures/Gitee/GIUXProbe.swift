@@ -208,8 +208,9 @@ enum GIUXProbe {
                           "a minimized non-reader document retains foreground lifetime")
                 other.deminiaturize(nil); await pause()
                 other.orderOut(nil); other.close()
-                GIReaderSession.shared.restorePolicy(); await pause()
-                try check(NSApp.activationPolicy() == .accessory, "closing the last real document restores accessory mode")
+                await pause()
+                try check(NSApp.activationPolicy() == .accessory,
+                          "native close notification restores accessory mode after the last real document")
 
                 let helper = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
                 helper.isReleasedWhenClosed = false
@@ -228,6 +229,19 @@ enum GIUXProbe {
                               !window.isVisible && !GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .accessory,
                               "same-turn settings open-close cancels delayed focus round \(round)")
                 }
+                for round in 1...3 {
+                    SettingsWindowController.shared.showWindow(); await pause()
+                    SettingsWindowController.shared.window?.performClose(nil)
+                    SettingsWindowController.shared.showWindow()
+                    await pause()
+                    try check(SettingsWindowController.shared.window?.isVisible == true &&
+                              SettingsWindowController.shared.window?.isKeyWindow == true &&
+                              !window.isVisible && !GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .regular,
+                              "same-turn settings close-reopen cancels the previous close callback round \(round)")
+                    SettingsWindowController.shared.window?.performClose(nil); await pause()
+                    try check(NSApp.activationPolicy() == .accessory && !window.isVisible,
+                              "rapidly reopened settings still closes to accessory mode round \(round)")
+                }
                 reader.show(); await pause()
                 GISettingsNavigation.shared.open(); await pause()
                 SettingsWindowController.shared.window?.performClose(nil)
@@ -242,7 +256,9 @@ enum GIUXProbe {
                           "reader close cancels a pending minimized-window reopen")
                 snapshot("all-negative-lifecycles-complete")
                 let info: [String: Any] = ["passed": failures.isEmpty, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations, "window_snapshots": windowSnapshots, "accessibilitySubrole": subrole,
-                    "synthetic_data": true, "live_gitee_tested": false, "third_party_alttab_hotkey_tested": false]
+                    "synthetic_data": true, "live_gitee_tested": false, "third_party_alttab_hotkey_tested": false,
+                    "updater_testing_argument": ProcessInfo.processInfo.arguments.contains("-SUEnableAutomaticChecks"),
+                    "automatic_update_checks_effective": UserDefaults.standard.bool(forKey: "SUEnableAutomaticChecks")]
                 try JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]).write(to: result)
             } catch {
                 let info: [String: Any] = ["passed": false, "error": error.localizedDescription, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations, "window_snapshots": windowSnapshots]

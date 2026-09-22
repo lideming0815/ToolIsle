@@ -11,6 +11,27 @@ final class GIReaderSession {
     private var restoreGeneration = 0
     private var restoringWindow = false
     private var reopenPending = false
+    private var windowCloseObserver: NSObjectProtocol?
+
+    private init() {
+        // Settings and the reader are not the only legitimate windows: Sparkle
+        // consent/update dialogs and other documents also own foreground time.
+        // Once the last one closes, reconcile after AppKit finishes ordering.
+        windowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async { [weak self] in
+                self?.restorePolicy()
+            }
+        }
+    }
+
+    func settingsOpened() {
+        // Invalidate a previous close callback even when the same native Settings
+        // window is reopened before the next event-loop turn.
+        restoreGeneration += 1
+        applyPolicy(.regular)
+    }
 
     func opened(_ window: NSWindow) {
         reader = window
@@ -98,22 +119,19 @@ final class GIReaderSession {
     private func applyPolicy(_ policy: NSApplication.ActivationPolicy) {
         if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
-    /// A titled AppKit helper is not necessarily a user-facing document. In
-    /// particular, invisible/zero-content helper windows must not keep the Dock
-    /// lifetime alive after Settings and the reader have both closed. Do not
-    /// identify helpers by private class names, identifiers or an empty title:
-    /// a real untitled window and a minimized document still count.
+    /// Count real user-facing windows, including untitled update dialogs and
+    /// minimized documents. Do not infer ownership from private identifiers,
+    /// titles, or whether a hidden/minimized window can currently become main.
     static func isDocument(_ window: NSWindow) -> Bool {
         guard window.styleMask.contains(.titled), !(window is NSPanel),
-              window.level == .normal, window.canBecomeMain,
-              !window.isExcludedFromWindowsMenu, !window.ignoresMouseEvents else { return false }
+              window.level == .normal else { return false }
         if window.isMiniaturized { return true }
         guard let content = window.contentView else { return false }
         let frame = window.frame.size
         let body = content.bounds.size
         let layout = window.contentLayoutRect.size
-        return layout.width > 1 && layout.height > 1 && window.alphaValue > 0 && frame.width.isFinite && frame.height.isFinite &&
-            frame.width > 1 && frame.height > 1 && body.width.isFinite && body.height.isFinite &&
-            body.width > 1 && body.height > 1
+        return layout.width > 1 && layout.height > 1 && window.alphaValue > 0 &&
+            frame.width.isFinite && frame.height.isFinite && frame.width > 1 && frame.height > 1 &&
+            body.width.isFinite && body.height.isFinite && body.width > 1 && body.height > 1
     }
 }

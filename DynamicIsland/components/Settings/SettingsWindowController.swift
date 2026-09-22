@@ -89,7 +89,7 @@ class SettingsWindowController: NSWindowController {
         isClosing = false
         presentationGeneration += 1
         let generation = presentationGeneration
-        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+        GIReaderSession.shared.settingsOpened()
         // Ensure window exists
         _ = window
 

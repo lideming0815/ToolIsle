@@ -54,7 +54,7 @@ class GiteeReaderLifecycleTests(unittest.TestCase):
 
     def test_document_classification_uses_visible_geometry_not_private_names(self):
         s = self.text('ToolIsleFeatures/Gitee/GIReaderSession.swift').split('static func isDocument(')[1]
-        for expected in ('window.canBecomeMain', 'window.isMiniaturized', 'window.alphaValue > 0',
+        for expected in ('window.styleMask.contains(.titled)', 'window.isMiniaturized', 'window.alphaValue > 0',
                          'frame.width > 1', 'body.width > 1'):
             self.assertIn(expected, s)
         self.assertNotIn('window.title', s)
@@ -72,6 +72,21 @@ class GiteeReaderLifecycleTests(unittest.TestCase):
         s = self.text('ToolIsleFeatures/Gitee/GINotchLayout.swift')
         action = s.split('func setMaximumItems(')[1].split('private func schedule()')[0]
         self.assertIn('refreshNow()', action)
+
+    def test_reopening_settings_invalidates_its_old_session_close(self):
+        s = self.text('ToolIsleFeatures/Gitee/GIReaderSession.swift')
+        action = s.split('func settingsOpened()')[1].split('func opened(')[0]
+        self.assertIn('restoreGeneration += 1', action)
+        self.assertIn('applyPolicy(.regular)', action)
+        self.assertIn('GIReaderSession.shared.settingsOpened()',
+                      self.text('components/Settings/SettingsWindowController.swift'))
+
+    def test_other_document_close_reconciles_after_native_ordering(self):
+        s = self.text('ToolIsleFeatures/Gitee/GIReaderSession.swift')
+        self.assertIn('NSWindow.willCloseNotification', s)
+        action = s.split('private init()')[1].split('func settingsOpened()')[0]
+        self.assertIn('DispatchQueue.main.async', action)
+        self.assertIn('self?.restorePolicy()', action)
 
 if __name__ == '__main__':
     unittest.main()
