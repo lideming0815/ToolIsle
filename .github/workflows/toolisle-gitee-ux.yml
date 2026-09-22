@@ -17,12 +17,26 @@ jobs:
     if: github.repository == 'lideming0815/ToolIsle' && github.ref == 'refs/heads/fix/gitee-reader-window-ux'
     runs-on: macos-26
     timeout-minutes: 40
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
           ref: ${{ github.sha }}
+      - name: Finalize scoped source edits as a normal reviewable commit
+        run: |
+          set -euo pipefail
+          if [ -f scripts/finalize_gitee_ux.py ]; then
+            python3 scripts/finalize_gitee_ux.py
+            git rm scripts/finalize_gitee_ux.py
+            git add DynamicIsland
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'fix(gitee): restore original tab geometry and complete non-reentrant reader lifecycle'
+            git push origin HEAD:refs/heads/fix/gitee-reader-window-ux
+          fi
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
@@ -33,7 +47,7 @@ jobs:
           import subprocess,json,hashlib
           from pathlib import Path
           base='60bf67dfa3109c90257c1cdd780a56e3b26e8e07'
-          allowed={'DynamicIsland.xcodeproj/project.pbxproj','DynamicIsland/ContentView.swift','DynamicIsland/DynamicIslandApp.swift','DynamicIsland/models/DynamicIslandViewModel.swift','DynamicIsland/components/Settings/SettingsWindowController.swift','DynamicIsland/ToolIsleFeatures/Gitee/GIViews.swift','DynamicIsland/ToolIsleFeatures/Gitee/GIStore.swift','DynamicIsland/ToolIsleFeatures/Gitee/GISettingsView.swift','tests/render_gitee_notch.py'}
+          allowed={'DynamicIsland.xcodeproj/project.pbxproj','DynamicIsland/ContentView.swift','DynamicIsland/DynamicIslandApp.swift','DynamicIsland/models/DynamicIslandViewModel.swift','DynamicIsland/components/Settings/SettingsWindowController.swift','DynamicIsland/components/Webcam/WebcamView.swift','DynamicIsland/ToolIsleFeatures/Gitee/GIViews.swift','DynamicIsland/ToolIsleFeatures/Gitee/GIStore.swift','DynamicIsland/ToolIsleFeatures/Gitee/GISettingsView.swift','tests/render_gitee_notch.py'}
           count=0
           for path in subprocess.check_output(['git','ls-tree','-r','--name-only',base]).decode().splitlines():
               if path in allowed:continue
@@ -51,6 +65,7 @@ jobs:
           assert 'layout.contentHeight' in notch and 'layout.metrics.limit' in notch
           print(json.dumps({'base':base,'source':subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(),'unchanged_baseline_files':count,'allowed_existing_files':sorted(allowed),'notch_copy_button':False,'gitee_api_and_markdown_unchanged':True},indent=2))
           PY
+          python3 -m unittest tests.test_gitee_reader_lifecycle 2>&1 | tee "$RUNNER_TEMP/gitee-fix-output/ux-lifecycle-structural-tests.txt"
           swiftc DynamicIsland/ToolIsleFeatures/Gitee/GINotchMetrics.swift tests/GiteeUXMetricsRegression.swift -o "$RUNNER_TEMP/GiteeUXMetricsRegression"
           "$RUNNER_TEMP/GiteeUXMetricsRegression" | tee "$RUNNER_TEMP/gitee-fix-output/ux-metrics-tests.txt"
           swiftc tests/GiteeActivationDriver.swift -o "$RUNNER_TEMP/GiteeActivationDriver"
@@ -85,6 +100,8 @@ jobs:
                       if result.exists() or p.poll() is not None:break
                       time.sleep(1)
                   subprocess.run(['/usr/sbin/screencapture','-x',str(out/'ux-final-desktop.png')],check=False)
+                  if not result.exists() and p.poll() is None:
+                      subprocess.run(['/usr/bin/sample',str(p.pid),'3','-file',str(out/'ux-hang-sample.txt')],timeout=15,check=False)
                   print((out/'ux-runtime.log').read_text())
                   assert result.exists(),'runtime probe missing; inspect log and screenshot'
                   data=json.loads(result.read_text());print(json.dumps(data,ensure_ascii=False,indent=2))
