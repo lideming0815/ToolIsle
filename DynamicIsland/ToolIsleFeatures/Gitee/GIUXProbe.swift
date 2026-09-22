@@ -10,13 +10,22 @@ enum GIUXProbe {
               let output = ProcessInfo.processInfo.environment["TOOLISLE_GITEE_UX_RESULT"] else { return }
         Task { @MainActor in
             var checks: [String] = []
+            var failures: [String] = []
             var sizes: [[String: Any]] = []
             let result = URL(fileURLWithPath: output)
             func check(_ condition: Bool, _ name: String) throws {
-                guard condition else { throw NSError(domain: "GIUXProbe", code: 1, userInfo: [NSLocalizedDescriptionKey: name]) }
+                guard condition else { failures.append(name); return }
                 checks.append(name)
             }
             func pause(_ seconds: Double = 0.5) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+            func requestUserReactivation() async throws {
+                // Exercise LaunchServices activation, not forbidden background focus stealing.
+                let config = NSWorkspace.OpenConfiguration()
+                config.activates = true
+                config.createsNewApplicationInstance = false
+                _ = try await NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config)
+                await pause(0.8)
+            }
             func capture(_ window: NSWindow, _ name: String) {
                 let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
                 process.arguments = ["-x", "-o", "-l", String(window.windowNumber), result.deletingLastPathComponent().appendingPathComponent(name + ".png").path]
@@ -50,12 +59,12 @@ enum GIUXProbe {
                 if let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first {
                     finder.activate(options: [.activateAllWindows]); await pause()
                     try check(!NSApp.isActive && window.isVisible, "external application activation does not hide reader")
-                    NSRunningApplication.current.activate(options: [.activateAllWindows]); await pause()
+                    try await requestUserReactivation()
                     try check(window.isKeyWindow && NSApp.activationPolicy() == .regular, "reactivation restores reader")
                 }
                 NSApp.hide(nil); await pause()
                 try check(GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .regular, "Cmd-H lifetime remains switchable")
-                NSApp.unhide(nil); NSApp.activate(ignoringOtherApps: true); await pause()
+                NSApp.unhide(nil); try await requestUserReactivation()
                 window.miniaturize(nil); await pause(0.8)
                 try check(window.isMiniaturized, "reader minimizes normally")
                 GISettingsNavigation.shared.open(); await pause()
@@ -115,11 +124,11 @@ enum GIUXProbe {
                 SettingsWindowController.shared.showWindow(); await pause()
                 SettingsWindowController.shared.window?.performClose(nil); await pause()
                 try check(!window.isVisible && NSApp.activationPolicy() == .accessory, "settings-only use does not reopen reader")
-                let info: [String: Any] = ["passed": true, "checks": checks, "sizes": sizes, "accessibilitySubrole": subrole,
+                let info: [String: Any] = ["passed": failures.isEmpty, "checks": checks, "failures": failures, "sizes": sizes, "accessibilitySubrole": subrole,
                     "synthetic_data": true, "live_gitee_tested": false, "third_party_alttab_hotkey_tested": false]
                 try JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]).write(to: result)
             } catch {
-                let info: [String: Any] = ["passed": false, "error": error.localizedDescription, "checks": checks, "sizes": sizes]
+                let info: [String: Any] = ["passed": false, "error": error.localizedDescription, "checks": checks, "failures": failures, "sizes": sizes]
                 try? JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]).write(to: result)
             }
         }

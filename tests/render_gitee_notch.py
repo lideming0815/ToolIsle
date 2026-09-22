@@ -14,7 +14,7 @@ old = subprocess.check_output(['git','show',f'{base}:{path}'],cwd=ROOT).decode()
 new = (ROOT/path).read_text()
 def extract(s):
     return s[s.index('struct GINotchView: View {'):s.index('struct GIReaderRootView: View {')]
-views = 'import AppKit\nimport SwiftUI\n' + extract(old).replace('struct GINotchView:', 'struct LegacyGINotchView:') + extract(new)
+views = (ROOT/'DynamicIsland/ToolIsleFeatures/Gitee/GINotchMetrics.swift').read_text() + '\nimport AppKit\nimport SwiftUI\n' + extract(old).replace('struct GINotchView:', 'struct LegacyGINotchView:') + extract(new)
 (OUT/'Views.swift').write_text(views)
 (OUT/'Harness.swift').write_text(r'''
 import AppKit
@@ -40,6 +40,8 @@ import SwiftUI
     }
     func activate() {}
     func refreshIssues(reset: Bool) {}
+    var filterSummary: String { "全部已选项目 · 全部状态" }
+    func clearFilters() { query = ""; repositoryFilter = ""; stateFilter = "all" }
     func retryFailedRepositories() {}
     func configure(_ state: String) {
         account = GIUser(id:-1,login:"fixture",name:"合成测试账户")
@@ -65,9 +67,16 @@ import SwiftUI
         }
     }
 }
+@MainActor final class GINotchLayout: ObservableObject {
+    static let shared = GINotchLayout()
+    var metrics: GINotchMetrics { GINotchMetrics(count: GIStore.shared.filteredItems.count, limit: 8) }
+    func refreshNow() {}
+    func contentHeight(screenName: String?) -> CGFloat { metrics.notchHeight(availableHeight: 900) - GINotchMetrics.hostInset }
+}
 @MainActor final class GIReaderWindowController {
     static let shared=GIReaderWindowController()
     func show(route:GIIssueRoute?=nil) {}
+    func showFilters() {}
 }
 @MainActor final class GISettingsNavigation {
     static let shared=GISettingsNavigation()
@@ -87,11 +96,12 @@ import SwiftUI
                         GIStore.shared.configure(state)
                         let appearance=NSAppearance(named:scheme == .light ? .aqua : .darkAqua)!
                         NSApp.appearance=appearance
+                        let height: CGFloat = legacy ? 190 : GINotchLayout.shared.contentHeight(screenName: nil)
                         let root=AnyView(Group {
                             if legacy { LegacyGINotchView() } else { GINotchView() }
-                        }.environment(\.colorScheme,scheme).frame(width:CGFloat(width),height:190).background(Color.black))
+                        }.environment(\.colorScheme,scheme).frame(width:CGFloat(width),height:height).background(Color.black))
                         let host=NSHostingView(rootView:root)
-                        let window=NSWindow(contentRect:NSRect(x:100,y:100,width:CGFloat(width),height:190),styleMask:.borderless,backing:.buffered,defer:false)
+                        let window=NSWindow(contentRect:NSRect(x:100,y:100,width:CGFloat(width),height:height),styleMask:.borderless,backing:.buffered,defer:false)
                         window.isReleasedWhenClosed=false; window.appearance=appearance; window.contentView=host
                         window.makeKeyAndOrderFront(nil)
                         RunLoop.main.run(until:Date().addingTimeInterval(0.25))
@@ -111,13 +121,13 @@ import SwiftUI
                             }
                             return n
                         }
-                        let header=bright(10,8,200,36), body=bright(10,40,width-12,155), footer=bright(width-170,158,width-12,187)
+                        let header=bright(10,8,200,36), body=bright(10,legacy ? 40 : 70,width-12,Int(height)-35), footer=bright(width-170,Int(height)-32,width-12,Int(height)-3)
                         records.append(["file":filename,"header_bright_pixels":header,"body_bright_pixels":body,"footer_bright_pixels":footer,"width":rep.pixelsWide,"height":rep.pixelsHigh])
                         if !legacy {
                             precondition(header>20,"invisible header: \(filename)")
                             precondition(body>20,"invisible data/state: \(filename)")
                             precondition(footer>20,"invisible reader action: \(filename)")
-                            precondition(abs(Double(rep.pixelsHigh)/scale-190)<2,"unexpected height")
+                            precondition(abs(Double(rep.pixelsHigh)/scale-Double(height))<2,"unexpected height")
                         }
                         window.orderOut(nil);window.contentView=nil;window.close()
                     }
