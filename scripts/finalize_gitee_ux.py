@@ -23,8 +23,23 @@ replace_once('DynamicIsland/ContentView.swift', '''            .onChange(of: coo
                 if enableStatsFeature {''', '''            .onChange(of: coordinator.currentView) { oldValue, newValue in
                 vm.refreshGiteeNotchSize(leavingGitee: oldValue == .giteeIssues)
                 if enableStatsFeature {''')
+replace_once('DynamicIsland/ToolIsleFeatures/Gitee/GIViews.swift',
+             'if GIReaderSession.shared.isOpen { NSApp.setActivationPolicy(.regular) }',
+             'if GIReaderSession.shared.isOpen && NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }')
+replace_once('DynamicIsland/components/Settings/SettingsWindowController.swift',
+             '        NSApp.setActivationPolicy(.regular)',
+             '        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }')
 p=Path('DynamicIsland/ToolIsleFeatures/Gitee/GIUXProbe.swift')
 s=p.read_text()
+s=s.replace('func requestUserReactivation() async throws {', 'func requestUserReactivation(hidden: Bool = false) async throws {')
+s=s.replace('driver.arguments = [String(ProcessInfo.processInfo.processIdentifier), path.path]',
+            'driver.arguments = [String(ProcessInfo.processInfo.processIdentifier), path.path, hidden ? "hidden" : "roundtrip"]')
+s=s.replace('''                        if NSApp.isActive { NSApp.yieldActivation(to: external) }
+                        external.activate(options: [.activateAllWindows])''', '''                        if !hidden {
+                            if NSApp.isActive { NSApp.yieldActivation(to: external) }
+                            external.activate(options: [.activateAllWindows])
+                        }''')
+s=s.replace('NSApp.unhide(nil); try await requestUserReactivation()', 'try await requestUserReactivation(hidden: true)')
 a=s.index('                try check(GIPasteboard.copy(')
 b=s.index('\n                let layout =',a)
 copy=s[a:b]
