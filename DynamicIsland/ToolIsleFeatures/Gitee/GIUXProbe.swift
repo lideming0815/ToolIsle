@@ -20,7 +20,7 @@ enum GIUXProbe {
                 checks.append(name)
             }
             func pause(_ seconds: Double = 0.5) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
-            func requestUserReactivation() async throws {
+            func requestUserReactivation(hidden: Bool = false) async throws {
                 guard let executable = ProcessInfo.processInfo.environment["TOOLISLE_GITEE_FOCUS_DRIVER"] else {
                     throw NSError(domain: "missing-focus-driver", code: 3)
                 }
@@ -28,14 +28,16 @@ enum GIUXProbe {
                 let ready = path.appendingPathExtension("ready")
                 let driver = Process()
                 driver.executableURL = URL(fileURLWithPath: executable)
-                driver.arguments = [String(ProcessInfo.processInfo.processIdentifier), path.path]
+                driver.arguments = [String(ProcessInfo.processInfo.processIdentifier), path.path, hidden ? "hidden" : "roundtrip"]
                 try driver.run()
                 defer { if driver.isRunning { driver.terminate() } }
                 for _ in 0..<40 {
                     if let text = try? String(contentsOf: ready, encoding: .utf8), let pid = Int32(text),
                        let external = NSRunningApplication(processIdentifier: pid) {
-                        if NSApp.isActive { NSApp.yieldActivation(to: external) }
-                        external.activate(options: [.activateAllWindows])
+                        if !hidden {
+                            if NSApp.isActive { NSApp.yieldActivation(to: external) }
+                            external.activate(options: [.activateAllWindows])
+                        }
                         break
                     }
                     await pause(0.1)
@@ -88,7 +90,7 @@ enum GIUXProbe {
                           "return from external application restores reader")
                 NSApp.hide(nil); await pause()
                 try check(GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .regular, "Cmd-H lifetime remains switchable")
-                NSApp.unhide(nil); try await requestUserReactivation()
+                try await requestUserReactivation(hidden: true)
                 window.miniaturize(nil); await pause(0.8)
                 try check(window.isMiniaturized, "reader minimizes normally")
                 GISettingsNavigation.shared.open(); await pause()
@@ -101,10 +103,6 @@ enum GIUXProbe {
                 store.clearFilters()
                 try check(!store.hasActiveFilters && store.selectedListID == selected && store.visit?.id == visit,
                           "clear filters keeps reading history/selection")
-                try check(GIPasteboard.copy(GIStore.demoB.url.absoluteString) && NSPasteboard.general.string(forType: .string) == GIStore.demoB.url.absoluteString,
-                          "real pasteboard contains only selected Issue URL")
-                try check(store.selectedListID == selected && store.visit?.id == visit, "copying a different row does not navigate")
-                try check(!GIPasteboard.copy(String(repeating: "a", count: 2 * 1024 * 1024 + 1)), "copy failure is observable")
 
                 let layout = GINotchLayout.shared
                 Defaults[.giteeNotchMaximumItems] = 8
@@ -133,12 +131,25 @@ enum GIUXProbe {
                 Defaults[.giteeNotchMaximumItems] = 10; await pause(0.8)
                 try check(layout.metrics.limit == 10 && layout.metrics.visibleCount == 10, "settings limit changes immediately to ten")
                 capture(notch, "ux-notch-10")
+                let expandedGiteeHeight = notch.frame.height
+                coordinator.currentView = .home; await pause(0.8)
+                try check(notch.frame.height < expandedGiteeHeight, "leaving Gitee restores Home native height")
+                for model in models where model.notchState == .open {
+                    try check(model.notchSize.height < expandedGiteeHeight - 60, "leaving Gitee restores original mouse hit area")
+                }
+                coordinator.currentView = .giteeIssues; await pause(0.8)
+                try check(abs(notch.frame.height - expandedGiteeHeight) < 1, "returning to Gitee restores adaptive height")
                 store.query = "fixture-no-match"; await pause(0.8); capture(notch, "ux-notch-empty")
                 store.clearFilters(); Defaults[.giteeNotchMaximumItems] = 8; await pause()
                 NSApp.appearance = NSAppearance(named: .aqua); capture(notch, "ux-notch-light")
                 NSApp.appearance = NSAppearance(named: .darkAqua); capture(notch, "ux-notch-dark")
                 NSApp.appearance = nil
                 reader.show(); await pause(); capture(window, "ux-reader")
+                try check(GIPasteboard.copy(GIStore.demoB.url.absoluteString) && NSPasteboard.general.string(forType: .string) == GIStore.demoB.url.absoluteString,
+                          "real pasteboard contains only selected Issue URL")
+                try check(store.selectedListID == selected && store.visit?.id == visit, "copying a different row does not navigate")
+                try check(!GIPasteboard.copy(String(repeating: "a", count: 2 * 1024 * 1024 + 1)), "copy failure is observable")
+
                 GISettingsNavigation.shared.open(); await pause()
                 window.performClose(nil); await pause()
                 try check(!GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .regular, "reader close preserves still-open settings")

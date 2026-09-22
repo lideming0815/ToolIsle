@@ -418,10 +418,12 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
         focusClipboardTabIfNeeded()
     }
     
-    func refreshGiteeNotchSize() {
-        guard coordinator.currentView == .giteeIssues, notchState == .open,
-              !Defaults[.enableMinimalisticUI] else { return }
-        let target = GINotchLayout.shared.size(base: openNotchSize, screenName: screen)
+    func refreshGiteeNotchSize(leavingGitee: Bool = false) {
+        guard notchState == .open,
+              leavingGitee || (coordinator.currentView == .giteeIssues && !Defaults[.enableMinimalisticUI]) else { return }
+        // Leaving the optional page restores Atoll's existing sizing calculation;
+        // otherwise a tall Gitee mouse region would linger over the Home page.
+        let target = calculateDynamicNotchSize()
         if notchSize != target { notchSize = target }
     }
 

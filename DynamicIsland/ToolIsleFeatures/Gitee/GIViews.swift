@@ -44,7 +44,7 @@ final class GIReaderWindowController: NSWindowController, NSWindowDelegate {
         if let window { GIReaderSession.shared.closed(window) }
     }
     func windowDidBecomeKey(_ notification: Notification) {
-        if GIReaderSession.shared.isOpen { NSApp.setActivationPolicy(.regular) }
+        if GIReaderSession.shared.isOpen && NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
     }
     func showFilters() {
         show()

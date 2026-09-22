@@ -833,7 +833,8 @@ struct ContentView: View {
                     }
                 }
             }
-            .onChange(of: coordinator.currentView) { _, newValue in
+            .onChange(of: coordinator.currentView) { oldValue, newValue in
+                vm.refreshGiteeNotchSize(leavingGitee: oldValue == .giteeIssues)
                 if enableStatsFeature {
                     let currentViewString = newValue == .stats ? "stats" : "other"
                     statsManager.updateMonitoringState(
