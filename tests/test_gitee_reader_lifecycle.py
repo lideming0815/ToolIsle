@@ -52,5 +52,26 @@ class GiteeReaderLifecycleTests(unittest.TestCase):
         self.assertNotIn('store.open', copy)
         self.assertIn('failed = !copied', copy)
 
+    def test_document_classification_uses_visible_geometry_not_private_names(self):
+        s = self.text('ToolIsleFeatures/Gitee/GIReaderSession.swift').split('static func isDocument(')[1]
+        for expected in ('window.canBecomeMain', 'window.isMiniaturized', 'window.alphaValue > 0',
+                         'frame.width > 1', 'body.width > 1'):
+            self.assertIn(expected, s)
+        self.assertNotIn('window.title', s)
+        self.assertNotIn('identifier', s)
+
+    def test_delayed_settings_focus_has_a_generation_and_visibility_guard(self):
+        s = self.text('components/Settings/SettingsWindowController.swift')
+        for expected in ('presentationGeneration += 1', 'generation == self.presentationGeneration',
+                         'window.isVisible, !window.isMiniaturized'):
+            self.assertIn(expected, s)
+
+    def test_settings_and_probe_share_immediate_layout_action(self):
+        for path in ('ToolIsleFeatures/Gitee/GISettingsView.swift', 'ToolIsleFeatures/Gitee/GIUXProbe.swift'):
+            self.assertIn('GINotchLayout.shared.setMaximumItems(', self.text(path))
+        s = self.text('ToolIsleFeatures/Gitee/GINotchLayout.swift')
+        action = s.split('func setMaximumItems(')[1].split('private func schedule()')[0]
+        self.assertIn('refreshNow()', action)
+
 if __name__ == '__main__':
     unittest.main()

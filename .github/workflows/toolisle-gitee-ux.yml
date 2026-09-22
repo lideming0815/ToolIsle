@@ -2,7 +2,13 @@ name: ToolIsle Gitee UX and window lifecycle
 on:
   push:
     branches: [fix/gitee-reader-window-ux]
-    paths: [.github/workflows/toolisle-gitee-ux.yml]
+    paths:
+      - .github/workflows/toolisle-gitee-ux.yml
+      - DynamicIsland/**
+      - DynamicIsland.xcodeproj/**
+      - tests/**
+      - scripts/build_gitee_settings_preview.sh
+      - TOOLISLE-GITEE-UX-FIX.md
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,31 +23,20 @@ jobs:
     if: github.repository == 'lideming0815/ToolIsle' && github.ref == 'refs/heads/fix/gitee-reader-window-ux'
     runs-on: macos-26
     timeout-minutes: 40
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           lfs: true
           ref: ${{ github.sha }}
-      - name: Finalize scoped source edits as a normal reviewable commit
-        run: |
-          set -euo pipefail
-          if [ -f scripts/finalize_gitee_ux.py ]; then
-            python3 scripts/finalize_gitee_ux.py
-            git rm scripts/finalize_gitee_ux.py
-            git add DynamicIsland
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'fix(gitee): distinguish user-facing documents from invisible AppKit helpers'
-            git push origin HEAD:refs/heads/fix/gitee-reader-window-ux
-          fi
+          persist-credentials: false
       - uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
       - name: Audit scope and exercise production sizing
         run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code
           mkdir -p "$RUNNER_TEMP/gitee-fix-output"
           python3 - <<'PY' | tee "$RUNNER_TEMP/gitee-fix-output/ux-scope-audit.json"
           import subprocess,json,hashlib
@@ -83,34 +78,49 @@ jobs:
           PY
           bash scripts/.build_ux_preview.sh
           rm scripts/.build_ux_preview.sh
-      - name: Verify actual settings round-trip, cross-process activation, copy and native notch sizes
+      - name: Verify native lifecycles in two independent application launches
         run: |
           python3 - <<'PY'
           import os,json,subprocess,time
           from pathlib import Path
           out=Path(os.environ['RUNNER_TEMP'])/'gitee-fix-output'
           binary=Path(os.environ['RUNNER_TEMP'])/'ToolIsleGiteeFix/ToolIsle.app/Contents/MacOS/ToolIsle'
-          result=out/'ux-runtime.json'
-          env=os.environ.copy();env['TOOLISLE_GITEE_UX_RESULT']=str(result)
-          env['TOOLISLE_GITEE_FOCUS_DRIVER']=str(Path(os.environ['RUNNER_TEMP'])/'GiteeActivationDriver')
-          with (out/'ux-runtime.log').open('w') as log:
-              p=subprocess.Popen([str(binary),'--gitee-reader-demo','--gitee-ux-probe'],env=env,stdout=log,stderr=subprocess.STDOUT)
-              try:
-                  for _ in range(120):
-                      if result.exists() or p.poll() is not None:break
-                      time.sleep(1)
-                  subprocess.run(['/usr/sbin/screencapture','-x',str(out/'ux-final-desktop.png')],check=False)
-                  if not result.exists() and p.poll() is None:
-                      subprocess.run(['/usr/bin/sample',str(p.pid),'3','-file',str(out/'ux-hang-sample.txt')],timeout=15,check=False)
-                  print((out/'ux-runtime.log').read_text())
-                  assert result.exists(),'runtime probe missing; inspect log and screenshot'
-                  data=json.loads(result.read_text());print(json.dumps(data,ensure_ascii=False,indent=2))
-                  assert data['passed'],data
-              finally:
-                  if p.poll() is None:
-                      p.terminate()
-                      try:p.wait(timeout=10)
-                      except subprocess.TimeoutExpired:p.kill();p.wait()
+          runs=[]
+          for index in (1,2):
+              folder=out/f'ux-runtime-{index}';folder.mkdir()
+              result=folder/'ux-runtime.json'
+              env=os.environ.copy();env['TOOLISLE_GITEE_UX_RESULT']=str(result)
+              env['TOOLISLE_GITEE_FOCUS_DRIVER']=str(Path(os.environ['RUNNER_TEMP'])/'GiteeActivationDriver')
+              record={'launch':index,'passed':False}
+              with (folder/'ux-runtime.log').open('w') as log:
+                  p=subprocess.Popen([str(binary),'--gitee-reader-demo','--gitee-ux-probe'],env=env,stdout=log,stderr=subprocess.STDOUT)
+                  try:
+                      for _ in range(150):
+                          if result.exists() or p.poll() is not None:break
+                          time.sleep(1)
+                      subprocess.run(['/usr/sbin/screencapture','-x',str(folder/'ux-final-desktop.png')],check=False)
+                      if not result.exists() and p.poll() is None:
+                          subprocess.run(['/usr/bin/sample',str(p.pid),'3','-file',str(folder/'ux-hang-sample.txt')],timeout=15,check=False)
+                      print((folder/'ux-runtime.log').read_text())
+                      assert result.exists(),'runtime probe missing; inspect log and screenshot'
+                      data=json.loads(result.read_text());print(json.dumps(data,ensure_ascii=False,indent=2))
+                      record['checks']=len(data.get('checks',[]));record['failures']=data.get('failures',[])
+                      assert data['passed'] and not data.get('failures') and record['checks']>0,data
+                      assert data['synthetic_data'] and not data['live_gitee_tested'] and not data['third_party_alttab_hotkey_tested']
+                      assert len(data['activation_runs'])==2,data
+                      assert all(a.get('native_cmd_tab_tested') and a.get('native_cmd_tab_returned_to_reader') and not a.get('error') for a in data['activation_runs']),data['activation_runs']
+                      record['passed']=True
+                  except Exception as error:
+                      record['error']=str(error)
+                  finally:
+                      if p.poll() is None:
+                          p.terminate()
+                          try:p.wait(timeout=10)
+                          except subprocess.TimeoutExpired:p.kill();p.wait()
+              runs.append(record)
+          summary={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'runs':runs,'passed':all(r['passed'] for r in runs)}
+          (out/'ux-runtime-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
+          assert summary['passed'],summary
           PY
       - name: Verify archive payloads and refresh checksums
         run: |

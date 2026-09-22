@@ -58,15 +58,21 @@ enum GIUXProbe {
             }
             @MainActor func snapshot(_ stage: String) {
                 let windows: [[String: Any]] = NSApp.windows.map { window in
-                    ["class": String(describing: type(of: window)), "title": window.title,
-                     "identifier": window.identifier?.rawValue ?? "", "visible": window.isVisible,
-                     "minimized": window.isMiniaturized, "key": window.isKeyWindow,
-                     "can_become_main": window.canBecomeMain, "excluded_from_menu": window.isExcludedFromWindowsMenu,
-                     "ignores_mouse": window.ignoresMouseEvents, "alpha": window.alphaValue,
-                     "frame": NSStringFromRect(window.frame), "content_rect": NSStringFromRect(window.contentLayoutRect),
-                     "content_view": window.contentView.map { String(describing: type(of: $0)) } ?? "nil",
-                     "accessibility_subrole": String(describing: window.accessibilitySubrole()),
-                     "normal_document": window.styleMask.contains(.titled) && !(window is NSPanel) && window.level == .normal]
+                    var info: [String: Any] = ["class": String(describing: type(of: window)), "title": window.title,
+                                              "identifier": window.identifier?.rawValue ?? "", "visible": window.isVisible,
+                                              "minimized": window.isMiniaturized, "key": window.isKeyWindow]
+                    info["normal_document"] = window.styleMask.contains(.titled) && !(window is NSPanel) && window.level == .normal
+                    info["foreground_document"] = GIReaderSession.isDocument(window)
+                    info["can_become_main"] = window.canBecomeMain
+                    info["excluded_from_menu"] = window.isExcludedFromWindowsMenu
+                    info["ignores_mouse"] = window.ignoresMouseEvents
+                    info["alpha"] = window.alphaValue
+                    info["frame"] = NSStringFromRect(window.frame)
+                    info["content_rect"] = NSStringFromRect(window.contentLayoutRect)
+                    info["content_bounds"] = window.contentView.map { NSStringFromRect($0.bounds) } ?? "nil"
+                    info["content_view"] = window.contentView.map { String(describing: type(of: $0)) } ?? "nil"
+                    info["accessibility_subrole"] = String(describing: window.accessibilitySubrole())
+                    return info
                 }
                 windowSnapshots.append(["stage": stage, "reader_open": GIReaderSession.shared.isOpen,
                                         "activation_policy": NSApp.activationPolicy().rawValue, "windows": windows,
@@ -146,7 +152,10 @@ enum GIUXProbe {
                 }
                 try check((sizes[3]["windowHeight"] as! CGFloat) > (sizes[1]["windowHeight"] as! CGFloat), "native notch grows from 1 to 8 rows")
                 try check(sizes[3]["windowHeight"] as! CGFloat == sizes[4]["windowHeight"] as! CGFloat, "more than 8 does not expand past preview cap")
-                GINotchLayout.shared.setMaximumItems(10); await pause(0.8)
+                GINotchLayout.shared.setMaximumItems(10)
+                try check(layout.metrics.limit == 10 && layout.metrics.visibleCount == 10,
+                          "preview limit updates synchronously before another event-loop turn")
+                await pause(0.8)
                 snapshot("setting-ten")
                 try check(Defaults[.giteeNotchMaximumItems] == 10 && layout.metrics.limit == 10 && layout.metrics.visibleCount == 10, "settings limit changes immediately to ten")
                 capture(notch, "ux-notch-10")
@@ -180,6 +189,58 @@ enum GIUXProbe {
                 SettingsWindowController.shared.window?.performClose(nil); await pause()
                 snapshot("settings-only-closed")
                 try check(!window.isVisible && NSApp.activationPolicy() == .accessory, "settings-only use does not reopen reader")
+                // Exercise the classifier using real native windows, including an
+                // untitled document. A private AppKit identifier or empty title is
+                // deliberately not used as the distinction.
+                let other = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 320, height: 180),
+                                     styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+                other.isReleasedWhenClosed = false
+                other.identifier = NSUserInterfaceItemIdentifier("ToolIsle.SyntheticOtherDocument")
+                other.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 180))
+                other.title = ""
+                other.makeKeyAndOrderFront(nil)
+                GIReaderSession.shared.restorePolicy(); await pause()
+                try check(GIReaderSession.isDocument(other) && NSApp.activationPolicy() == .regular,
+                          "a real untitled document retains foreground lifetime")
+                other.miniaturize(nil); await pause(0.8)
+                GIReaderSession.shared.restorePolicy()
+                try check(other.isMiniaturized && NSApp.activationPolicy() == .regular,
+                          "a minimized non-reader document retains foreground lifetime")
+                other.deminiaturize(nil); await pause()
+                other.orderOut(nil); other.close()
+                GIReaderSession.shared.restorePolicy(); await pause()
+                try check(NSApp.activationPolicy() == .accessory, "closing the last real document restores accessory mode")
+
+                let helper = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: false)
+                helper.isReleasedWhenClosed = false
+                helper.alphaValue = 0
+                helper.orderFrontRegardless()
+                GIReaderSession.shared.restorePolicy(); await pause()
+                try check(!GIReaderSession.isDocument(helper) && NSApp.activationPolicy() == .accessory,
+                          "an invisible zero-content helper does not retain foreground lifetime")
+                helper.orderOut(nil); helper.close()
+
+                for round in 1...3 {
+                    SettingsWindowController.shared.showWindow()
+                    SettingsWindowController.shared.window?.performClose(nil)
+                    await pause()
+                    try check(SettingsWindowController.shared.window?.isVisible == false &&
+                              !window.isVisible && !GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .accessory,
+                              "same-turn settings open-close cancels delayed focus round \(round)")
+                }
+                reader.show(); await pause()
+                GISettingsNavigation.shared.open(); await pause()
+                SettingsWindowController.shared.window?.performClose(nil)
+                window.performClose(nil); await pause()
+                try check(!window.isVisible && !GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .accessory,
+                          "settings-then-reader close invalidates deferred focus restoration")
+                reader.show(); await pause()
+                window.miniaturize(nil); await pause(0.8)
+                try check(GIReaderSession.shared.reopen(), "queue an explicit reader reopen before close")
+                window.close(); await pause(0.8)
+                try check(!window.isVisible && !GIReaderSession.shared.isOpen && NSApp.activationPolicy() == .accessory,
+                          "reader close cancels a pending minimized-window reopen")
+                snapshot("all-negative-lifecycles-complete")
                 let info: [String: Any] = ["passed": failures.isEmpty, "checks": checks, "failures": failures, "sizes": sizes, "activation_runs": activations, "window_snapshots": windowSnapshots, "accessibilitySubrole": subrole,
                     "synthetic_data": true, "live_gitee_tested": false, "third_party_alttab_hotkey_tested": false]
                 try JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]).write(to: result)

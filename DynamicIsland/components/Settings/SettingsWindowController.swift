@@ -28,6 +28,7 @@ class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
     private var updaterController: SPUStandardUpdaterController?
     private var isClosing = false
+    private var presentationGeneration = 0
     
     private init() {
         let window = NSWindow(
@@ -86,6 +87,9 @@ class SettingsWindowController: NSWindowController {
     
     func showWindow() {
         isClosing = false
+        presentationGeneration += 1
+        let generation = presentationGeneration
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
         // Ensure window exists
         _ = window
 
@@ -111,8 +115,9 @@ class SettingsWindowController: NSWindowController {
         
         // Force window to front after activation
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isClosing else { return }
-            self.window?.makeKeyAndOrderFront(nil)
+            guard let self, !self.isClosing, generation == self.presentationGeneration,
+                  let window = self.window, window.isVisible, !window.isMiniaturized else { return }
+            window.makeKeyAndOrderFront(nil)
         }
     }
     
@@ -123,6 +128,7 @@ class SettingsWindowController: NSWindowController {
     
     private func relinquishFocus() {
         isClosing = true
+        presentationGeneration += 1
         window?.orderOut(nil)
         
         // A still-open Gitee reader remains a normal switchable application window.

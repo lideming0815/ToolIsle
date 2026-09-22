@@ -98,15 +98,22 @@ final class GIReaderSession {
     private func applyPolicy(_ policy: NSApplication.ActivationPolicy) {
         if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
-    private static func isDocument(_ window: NSWindow) -> Bool {
-        // AppKit/SwiftUI can retain ordered-in helper windows after a menu or
-        // activation transition. Their isVisible flag alone does not make them
-        // user-facing documents that should keep a menu-bar app in the Dock.
+    /// A titled AppKit helper is not necessarily a user-facing document. In
+    /// particular, invisible/zero-content helper windows must not keep the Dock
+    /// lifetime alive after Settings and the reader have both closed. Do not
+    /// identify helpers by private class names, identifiers or an empty title:
+    /// a real untitled window and a minimized document still count.
+    static func isDocument(_ window: NSWindow) -> Bool {
         guard window.styleMask.contains(.titled), !(window is NSPanel),
               window.level == .normal, window.canBecomeMain,
-              !window.isExcludedFromWindowsMenu, !window.ignoresMouseEvents,
-              window.alphaValue > 0, window.contentView != nil else { return false }
-        let content = window.contentLayoutRect
-        return content.width > 1 && content.height > 1
+              !window.isExcludedFromWindowsMenu, !window.ignoresMouseEvents else { return false }
+        if window.isMiniaturized { return true }
+        guard let content = window.contentView else { return false }
+        let frame = window.frame.size
+        let body = content.bounds.size
+        let layout = window.contentLayoutRect.size
+        return layout.width > 1 && layout.height > 1 && window.alphaValue > 0 && frame.width.isFinite && frame.height.isFinite &&
+            frame.width > 1 && frame.height > 1 && body.width.isFinite && body.height.isFinite &&
+            body.width > 1 && body.height > 1
     }
 }
