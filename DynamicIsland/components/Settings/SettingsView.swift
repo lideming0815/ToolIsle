@@ -53,6 +53,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case media
     case devices
     case extensions
+    case gitee
     case timer
     case calendar
     case hudAndOSD
@@ -80,7 +81,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .clipboard, .screenAssistant, .colorPicker, .shelf,
              .downloads, .shortcuts:                                         return .utilities
         case .stats, .terminal:                                              return .developer
-        case .extensions:                                                    return .integrations
+        case .extensions, .gitee:                                            return .integrations
         case .about:                                                         return .info
         }
     }
@@ -94,6 +95,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .media: return String(localized: "Media")
         case .devices: return String(localized: "Devices")
         case .extensions: return String(localized: "Extensions")
+        case .gitee: return "Gitee"
         case .timer: return String(localized: "Timer")
         case .calendar: return String(localized: "Calendar")
         case .hudAndOSD: return String(localized: "Controls")
@@ -120,6 +122,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .media: return "play.laptopcomputer"
         case .devices: return "headphones"
         case .extensions: return "puzzlepiece.extension"
+        case .gitee: return "text.bubble"
         case .timer: return "timer"
         case .calendar: return "calendar"
         case .hudAndOSD: return "dial.medium.fill"
@@ -146,6 +149,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .media: return .green
         case .devices: return Color(red: 0.1, green: 0.11, blue: 0.12)
         case .extensions: return Color(red: 0.557, green: 0.353, blue: 0.957)
+        case .gitee: return .indigo
         case .timer: return .red
         case .calendar: return .cyan
         case .hudAndOSD: return .indigo
@@ -221,6 +225,7 @@ enum LockScreenSettingsSection: String, CaseIterable, Identifiable {
 
 private enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = [
+        SettingsSearchEntry(tab: .gitee, title: "Gitee 账户与项目", keywords: ["gitee", "issue", "令牌", "账户", "项目", "watch", "star"], highlightID: nil),
         // General
         SettingsSearchEntry(tab: .general, title: "Enable Minimalistic UI", keywords: ["minimalistic", "ui mode", "general"], highlightID: SettingsTab.general.highlightID(for: "Enable Minimalistic UI")),
         SettingsSearchEntry(tab: .general, title: "Menubar icon", keywords: ["menu bar", "status bar", "icon"], highlightID: SettingsTab.general.highlightID(for: "Menubar icon")),
@@ -607,6 +612,7 @@ private struct SettingsForm<Content: View>: View {
 
 struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
+    @ObservedObject private var giteeSettingsNavigation = GISettingsNavigation.shared
     @State private var searchText: String = ""
     @StateObject private var highlightCoordinator = SettingsHighlightCoordinator()
     @Default(.enableMinimalisticUI) var enableMinimalisticUI
@@ -631,13 +637,14 @@ struct SettingsView: View {
                 Divider()
                     .padding(.horizontal, 12)
 
+                ScrollViewReader { giteeSidebarProxy in
                 List(selection: selectionBinding) {
                     ForEach(groupedFilteredTabs, id: \.group) { section in
                         Section {
                             ForEach(section.tabs) { tab in
                                 NavigationLink(value: tab) {
                                     sidebarRow(for: tab)
-                                }
+                                }.id(tab)
                             }
                         } header: {
                             if let title = section.group.title {
@@ -652,6 +659,14 @@ struct SettingsView: View {
                 .toolbar(removing: .sidebarToggle)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 210, max: 240)
                 .environment(\.defaultMinListRowHeight, 44)
+                .onChange(of: selectedTab, initial: true) { _, value in
+                    guard value == .gitee else { return }
+                    DispatchQueue.main.async {
+                        guard selectedTab == .gitee else { return }
+                        giteeSidebarProxy.scrollTo(SettingsTab.gitee, anchor: .center)
+                    }
+                }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } detail: {
@@ -664,6 +679,12 @@ struct SettingsView: View {
         .environmentObject(highlightCoordinator)
         .formStyle(.grouped)
         .frame(width: 700)
+        .onReceive(giteeSettingsNavigation.$request) { request in
+            guard request != nil else { return }
+            searchText = ""
+            selectedTab = .gitee
+            giteeSettingsNavigation.request = nil
+        }
         .onChange(of: searchText) { _, newValue in
             let matches = tabsMatchingSearch(newValue)
             guard let firstMatch = matches.first else { return }
@@ -822,6 +843,7 @@ struct SettingsView: View {
             .terminal,
             // Integrations
             .extensions,
+            .gitee,
             // Info
             .about
         ]
@@ -1046,6 +1068,10 @@ struct SettingsView: View {
             SettingsForm(tab: .devices) {
                 DevicesSettingsView()
             }
+        case .gitee:
+            SettingsForm(tab: .gitee) {
+                GIDedicatedSettingsView()
+            }
         case .extensions:
             SettingsForm(tab: .extensions) {
                 ExtensionsSettingsView()
@@ -1206,6 +1232,7 @@ struct GeneralSettings: View {
                 }
                 .settingsHighlight(id: highlightID("Show on all displays"))
                 Picker("Show on a specific display", selection: $coordinator.preferredScreen) {
+                    Text("Automatic (built-in display first)").tag("")
                     ForEach(screens, id: \.self) { screen in
                         Text(screen)
                     }
@@ -4134,7 +4161,7 @@ struct About: View {
                     HStack {
                         Text("Release name")
                         Spacer()
-                        Text(Defaults[.releaseName])
+                        Text(verbatim: "ToolIsle · \(Defaults[.releaseName])")
                             .foregroundStyle(.secondary)
                     }
                     HStack {

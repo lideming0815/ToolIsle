@@ -1,0 +1,118 @@
+name: ToolIsle Gitee settings and path preview
+on:
+  push:
+    branches: [fix/gitee-settings-and-repo-path]
+    paths: [.github/workflows/toolisle-gitee-reader.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: toolisle-gitee-settings-path-preview
+  cancel-in-progress: false
+jobs:
+  macos:
+    if: github.repository == 'lideming0815/ToolIsle' && github.ref == 'refs/heads/fix/gitee-settings-and-repo-path'
+    runs-on: macos-26
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+          ref: fix/gitee-settings-and-repo-path
+      - name: Apply and commit narrowly scoped settings navigation refinements
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          r=Path.cwd()
+          p=r/'DynamicIsland/ToolIsleFeatures/Gitee/GISettingsView.swift';s=p.read_text()
+          if '.navigationTitle("Gitee")' not in s:
+              assert s.count('        .formStyle(.grouped)')==1
+              p.write_text(s.replace('        .formStyle(.grouped)','        .formStyle(.grouped)\n        .navigationTitle("Gitee")'))
+          p=r/'DynamicIsland/components/Settings/SettingsView.swift';s=p.read_text()
+          if 'ScrollViewReader { giteeSidebarProxy in' not in s:
+              old='                List(selection: selectionBinding) {'
+              assert s.count(old)==1
+              s=s.replace(old,'                ScrollViewReader { giteeSidebarProxy in\n'+old)
+              old='''                                NavigationLink(value: tab) {
+                                              sidebarRow(for: tab)
+                                          }'''.replace('                                              sidebarRow','                                    sidebarRow').replace('                                          }','                                }')
+              assert s.count(old)==1
+              s=s.replace(old,old+'.id(tab)')
+              old='                .environment(\\.defaultMinListRowHeight, 44)'
+              assert s.count(old)==1
+              s=s.replace(old,old+'''
+                          .onChange(of: selectedTab, initial: true) { _, value in
+                              guard value == .gitee else { return }
+                              DispatchQueue.main.async {
+                                  guard selectedTab == .gitee else { return }
+                                  giteeSidebarProxy.scrollTo(SettingsTab.gitee, anchor: .center)
+                              }
+                          }
+                          }'''.replace('\n                          ', '\n                '))
+              p.write_text(s)
+          p=r/'tests/test_gitee_settings.py';s=p.read_text()
+          anchor='    def test_reader_routes_to_settings(self):'
+          if 'dedicated.navigationTitle' not in s:
+              assert s.count(anchor)==1
+              s=s.replace(anchor,'        self.assertIn("giteeSidebarProxy.scrollTo(SettingsTab.gitee",s)\n        dedicated=(R/"DynamicIsland/ToolIsleFeatures/Gitee/GISettingsView.swift").read_text()\n        self.assertIn(\'.navigationTitle("Gitee")\',dedicated)  # dedicated.navigationTitle\n'+anchor)
+              p.write_text(s)
+          print('Gitee title and selected sidebar row visibility verified.')
+          PY
+          git add DynamicIsland/ToolIsleFeatures/Gitee/GISettingsView.swift DynamicIsland/components/Settings/SettingsView.swift tests/test_gitee_settings.py
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'fix(gitee): show the dedicated page title and selected settings row'
+            git push origin HEAD:refs/heads/fix/gitee-settings-and-repo-path
+          fi
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Audit original functionality and General settings isolation
+        run: |
+          mkdir -p "$RUNNER_TEMP/gitee-fix-output"
+          python3 - <<'PY' | tee "$RUNNER_TEMP/gitee-fix-output/source-audit.json"
+          import subprocess,json,hashlib
+          from pathlib import Path
+          base='48ed165374f43ba419cba6f6eee0e0e97caff049'
+          old=subprocess.check_output(['git','ls-tree','-r','--name-only',base]).decode().splitlines()
+          changes=set(subprocess.check_output(['git','diff','--name-only',base,'HEAD']).decode().splitlines())
+          allowed={'DynamicIsland/components/Settings/SettingsView.swift','DynamicIsland.xcodeproj/project.pbxproj','scripts/integrate_gitee_reader.py','.github/workflows/toolisle-gitee-reader.yml'}
+          count=0
+          for path in old:
+              if path in allowed or path.startswith('DynamicIsland/ToolIsleFeatures/Gitee/'):continue
+              p=Path(path);expected=subprocess.check_output(['git','show',f'{base}:{path}'])
+              actual=str(p.readlink()).encode() if p.is_symlink() else p.read_bytes()
+              if expected.startswith(b'version https://git-lfs'):
+                  fields=dict(x.split(' ',1) for x in expected.decode().strip().splitlines())
+                  assert len(actual)==int(fields['size']) and hashlib.sha256(actual).hexdigest()==fields['oid'].split(':')[1],path
+              else:assert actual==expected,path
+              count+=1
+          path='DynamicIsland/components/Settings/SettingsView.swift'
+          original=subprocess.check_output(['git','show',f'{base}:{path}']).decode()
+          current=Path(path).read_text()
+          extract=lambda s:s[s.index('struct GeneralSettings:'):s.index('struct Charge:')]
+          assert extract(current)==extract(original).replace('            GIReaderSettingsSection()\n','')
+          assert 'GIDedicatedSettingsView()' in current
+          print(json.dumps({'base':base,'source':subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(),'unchanged_nonfeature_files':count,'general_settings_only_removed_gitee_section':True,'changed_files':sorted(changes),'user_credentials_in_ci':False},indent=2))
+          PY
+      - name: Test, full Release build, original startup and reader navigation
+        run: bash scripts/build_gitee_settings_preview.sh
+      - name: Collect failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/gitee-fix-output"
+          find ~/Library/Logs/DiagnosticReports -maxdepth 1 \( -iname '*ToolIsle*' -o -iname '*Atoll*' \) -exec cp {} "$RUNNER_TEMP/gitee-fix-output/" \; || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: toolisle-gitee-settings-path-preview
+          path: ${{ runner.temp }}/gitee-fix-output/
+          retention-days: 14
+          if-no-files-found: warn

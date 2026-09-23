@@ -1,0 +1,141 @@
+name: ToolIsle integrated native application
+on:
+  push:
+    branches: [fix/gitee-checkless-selection, dev]
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: toolisle-integration-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  macos:
+    if: github.repository == 'lideming0815/ToolIsle' && (github.ref == 'refs/heads/fix/gitee-checkless-selection' || github.ref == 'refs/heads/dev')
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Audit scope, restored application and compact geometry
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --exit-code
+          mkdir -p "$RUNNER_TEMP/gitee-fix-output"
+          python3 - <<'PY' | tee "$RUNNER_TEMP/gitee-fix-output/checkless-scope-audit.json"
+          import subprocess,hashlib,json
+          from pathlib import Path
+          base='9b93364a357611069a8e14bb7a91c39a064b1d75'
+          allowed={'DynamicIsland.xcodeproj/project.pbxproj','DynamicIsland/ToolIsleFeatures/Gitee/GITagControls.swift','DynamicIsland/ToolIsleFeatures/Gitee/GIListPresentation.swift','DynamicIsland/ToolIsleFeatures/Gitee/GILabelProbe.swift','tests/GiteeLabelsRegression.swift','tests/test_privacy_configuration.py','ReadMe.md','CHANGELOG.md','TOOLISLE.md','.github/workflows/ci.yml','.github/workflows/mirror-release.yml','.github/workflows/nightly-merge.yml','.github/workflows/release.yml','.github/workflows/triage-slash-commands.yml'}
+          subprocess.run(['git','merge-base','--is-ancestor','9c2d9dcfe547a0fd0ae25d4f513a3ac9687fd0be','HEAD'],check=True)
+          assert not Path('Package.swift').exists()
+          for temporary in ['scripts/finalize_checkless.py','scripts/.checkless_source.py','scripts/gitee-checkless-finish.b64']:
+              assert not Path(temporary).exists(),temporary
+          count=0
+          for path in subprocess.check_output(['git','ls-tree','-r','--name-only',base],text=True).splitlines():
+              if path in allowed:continue
+              p=Path(path);expected=subprocess.check_output(['git','show',base+':'+path]);actual=str(p.readlink()).encode() if p.is_symlink() else p.read_bytes()
+              if expected.startswith(b'version https://git-lfs'):
+                  fields=dict(x.split(' ',1) for x in expected.decode().strip().splitlines())
+                  assert len(actual)==int(fields['size']) and hashlib.sha256(actual).hexdigest()==fields['oid'].split(':')[1],path
+              else:assert actual==expected,path
+              count+=1
+          for name in ['ci.yml','release.yml','mirror-release.yml','nightly-merge.yml','triage-slash-commands.yml']:
+              expected=subprocess.check_output(['git','show',base+':.github/workflows/'+name])
+              assert (Path('docs/upstream-workflows')/name).read_bytes()==expected,name
+          print(json.dumps({'base':base,'source':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'unchanged_baseline_files':count,'allowed_existing_files':sorted(allowed),'native_application_preserved':True,'upstream_workflows_archived_verbatim':True,'checkmark_icon_and_reservation_removed':True},indent=2))
+          PY
+          python3 -m unittest tests.test_gitee_checkless tests.test_gitee_reader_lifecycle 2>&1 | tee "$RUNNER_TEMP/gitee-fix-output/checkless-structural-tests.txt"
+          swiftc DynamicIsland/ToolIsleFeatures/Gitee/GICore.swift DynamicIsland/ToolIsleFeatures/Gitee/GIListPresentation.swift tests/GiteeLabelsRegression.swift -o "$RUNNER_TEMP/LabelsTests"
+          "$RUNNER_TEMP/LabelsTests" | tee "$RUNNER_TEMP/gitee-fix-output/labels-core-tests.txt"
+          swiftc DynamicIsland/ToolIsleFeatures/Gitee/GINotchMetrics.swift tests/GiteeUXMetricsRegression.swift -o "$RUNNER_TEMP/MetricsTests"
+          "$RUNNER_TEMP/MetricsTests" | tee "$RUNNER_TEMP/gitee-fix-output/ux-metrics-tests.txt"
+          swiftc tests/GiteeActivationDriver.swift -o "$RUNNER_TEMP/GiteeActivationDriver"
+      - name: Render unchanged notch in both appearances
+        run: OUT="$RUNNER_TEMP/gitee-fix-output" python3 tests/render_gitee_notch.py | tee "$RUNNER_TEMP/gitee-fix-output/ux-appearance-tests.txt"
+      - name: Build original Release target and retain prior regressions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('scripts/build_gitee_settings_preview.sh').read_text().replace('1640','1644').replace('gitee.2','gitee.6').replace('TOOLISLE-GITEE-SETTINGS-FIX.md','TOOLISLE-GITEE-CHECKLESS.md')
+          s=s.replace('No user credentials are provided to this public CI. Local direct requests failed DNS resolution before reaching Gitee.','No live Gitee credentials supplied; tests use explicit synthetic fixtures.')
+          Path('scripts/.build_integration.sh').write_text(s)
+          PY
+          bash scripts/.build_integration.sh
+          rm scripts/.build_integration.sh
+      - name: Verify native UX regressions twice and checkless filters
+        run: |
+          python3 - <<'PY'
+          import os,json,subprocess,time
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'gitee-fix-output';binary=Path(os.environ['RUNNER_TEMP'])/'ToolIsleGiteeFix/ToolIsle.app/Contents/MacOS/ToolIsle'
+          runs=[]
+          for name,flag,key,resultName in [('ux-runtime-1','--gitee-ux-probe','TOOLISLE_GITEE_UX_RESULT','ux-runtime.json'),('ux-runtime-2','--gitee-ux-probe','TOOLISLE_GITEE_UX_RESULT','ux-runtime.json'),('label-ui','--gitee-label-probe','TOOLISLE_LABEL_RESULT','labels-ui.json')]:
+              folder=out/name;folder.mkdir();result=folder/resultName
+              env=os.environ.copy();env[key]=str(result);env['TOOLISLE_GITEE_FOCUS_DRIVER']=str(Path(os.environ['RUNNER_TEMP'])/'GiteeActivationDriver')
+              record={'name':name,'passed':False}
+              with (folder/'runtime.log').open('w') as log:
+                  p=subprocess.Popen([str(binary),'--gitee-reader-demo',flag,'-SUEnableAutomaticChecks','NO'],env=env,stdout=log,stderr=subprocess.STDOUT)
+                  try:
+                      for _ in range(150):
+                          if result.exists() or p.poll() is not None:break
+                          time.sleep(1)
+                      subprocess.run(['/usr/sbin/screencapture','-x',str(folder/'desktop.png')],check=False)
+                      assert result.exists(),'Native runtime report missing'
+                      data=json.loads(result.read_text());print(json.dumps(data,ensure_ascii=False,indent=2))
+                      assert data['passed'] and not data['failures'] and len(data['checks'])>0,data
+                      assert data['synthetic_data'] and not data['live_gitee_tested'] and not data['third_party_alttab_hotkey_tested']
+                      if flag=='--gitee-ux-probe':
+                          assert len(data['checks'])>=66,data
+                          assert len(data['activation_runs'])==2 and all(a.get('native_cmd_tab_tested') and a.get('native_cmd_tab_returned_to_reader') and not a.get('error') for a in data['activation_runs'])
+                      else:assert len(data['checks'])>=40,data
+                      record.update(passed=True,checks=len(data['checks']))
+                  except Exception as error:record['error']=str(error)
+                  finally:
+                      if p.poll() is None:
+                          p.terminate()
+                          try:p.wait(timeout=10)
+                          except subprocess.TimeoutExpired:p.kill();p.wait()
+              runs.append(record)
+          summary={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'source_tree':subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),'updater_override':'process-only -SUEnableAutomaticChecks NO','production_updater_defaults_modified':False,'runs':runs,'passed':all(r['passed'] for r in runs)}
+          (out/'integration-runtime-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2));assert summary['passed'],summary
+          PY
+      - name: Verify archive payloads and hydrate source media
+        run: |
+          python3 - <<'PY'
+          import os,zipfile,hashlib,subprocess
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'gitee-fix-output';source=out/'ToolIsle-gitee.6-source.zip';hydrated=out/'hydrated-source.zip'
+          media=[]
+          with zipfile.ZipFile(source) as src, zipfile.ZipFile(hydrated,'w',zipfile.ZIP_DEFLATED) as dst:
+              for info in src.infolist():
+                  data=src.read(info)
+                  if data.startswith(b'version https://git-lfs'):
+                      relative=info.filename.removeprefix('ToolIsle-gitee-fix/');fields=dict(x.split(' ',1) for x in data.decode().strip().splitlines());data=Path(relative).read_bytes()
+                      assert len(data)==int(fields['size']) and hashlib.sha256(data).hexdigest()==fields['oid'].split(':')[1],relative
+                      media.append(relative)
+                  dst.writestr(info,data)
+          hydrated.replace(source)
+          for p in out.glob('*.zip'):
+              with zipfile.ZipFile(p) as z:assert z.testzip() is None and len(z.namelist())==len(set(z.namelist())),p
+          (out/'source-media.txt').write_text('\n'.join(media)+'\n')
+          (out/'source-tree.txt').write_text(subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True))
+          (out/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in sorted(out.iterdir()) if p.suffix in {'.dmg','.zip'}))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: toolisle-integrated-preview
+          path: ${{ runner.temp }}/gitee-fix-output/
+          retention-days: 14
+          if-no-files-found: error

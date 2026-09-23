@@ -1,0 +1,89 @@
+name: ToolIsle Gitee updater-interference diagnostic
+on:
+  push:
+    branches: [fix/gitee-reader-window-ux]
+    paths: [.github/workflows/toolisle-gitee-updater-diagnostic.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  replay:
+    if: github.repository == 'lideming0815/ToolIsle' && github.ref == 'refs/heads/fix/gitee-reader-window-ux'
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: toolisle-gitee-ux-preview
+          run-id: 35742379427
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/prior-build
+      - name: Replay the exact prior binary with and without the documented testing argument
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat "$RUNNER_TEMP/prior-build/source-commit.txt")" = d817ecac60bb24d7bb380c4ec5f0d60bf1eaefe3
+          ditto -x -k "$RUNNER_TEMP/prior-build/ToolIsle-2.3.3-gitee.4-macOS-arm64.zip" "$RUNNER_TEMP/replay"
+          swiftc tests/GiteeActivationDriver.swift -o "$RUNNER_TEMP/GiteeActivationDriver"
+          cat > "$RUNNER_TEMP/WindowDiagnostics.swift" <<'SWIFT'
+          import Foundation
+          import CoreGraphics
+          let pid = Int32(CommandLine.arguments[1])!
+          let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+          let owned = windows.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == pid }
+          let data = try JSONSerialization.data(withJSONObject: owned, options: [.prettyPrinted, .sortedKeys])
+          FileHandle.standardOutput.write(data)
+          SWIFT
+          swiftc "$RUNNER_TEMP/WindowDiagnostics.swift" -o "$RUNNER_TEMP/WindowDiagnostics"
+          python3 - <<'PY'
+          import hashlib,json,os,subprocess,time
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP']);out=root/'updater-diagnostic';out.mkdir()
+          binary=root/'replay/ToolIsleGiteeFix/ToolIsle.app/Contents/MacOS/ToolIsle'
+          assert binary.is_file(),binary
+          app=binary.parent.parent.parent
+          subprocess.run(['codesign','--verify','--deep','--strict',str(app)],check=True)
+          before=hashlib.sha256(binary.read_bytes()).hexdigest()
+          records=[]
+          for name,extra in [('updater-consent',['-SUHasLaunchedBefore','YES']),('isolated-updater',['-SUEnableAutomaticChecks','NO'])]:
+              folder=out/name;folder.mkdir();result=folder/'ux-runtime.json'
+              env=os.environ.copy();env['TOOLISLE_GITEE_UX_RESULT']=str(result)
+              env['TOOLISLE_GITEE_FOCUS_DRIVER']=str(root/'GiteeActivationDriver')
+              args=[str(binary),'--gitee-reader-demo','--gitee-ux-probe']+extra
+              with (folder/'ux-runtime.log').open('w') as log:
+                  p=subprocess.Popen(args,env=env,stdout=log,stderr=subprocess.STDOUT)
+                  try:
+                      for _ in range(150):
+                          if result.exists() or p.poll() is not None:break
+                          time.sleep(1)
+                      if p.poll() is None:
+                          raw=subprocess.check_output([str(root/'WindowDiagnostics'),str(p.pid)])
+                          (folder/'native-windows.json').write_bytes(raw)
+                          for win in json.loads(raw):
+                              if win.get('kCGWindowLayer')==0 and win.get('kCGWindowIsOnscreen'):
+                                  number=win['kCGWindowNumber']
+                                  subprocess.run(['/usr/sbin/screencapture','-x','-o','-l',str(number),str(folder/f'window-{number}.png')],check=False)
+                      data=json.loads(result.read_text()) if result.exists() else {'passed':False,'error':'missing runtime result'}
+                      records.append({'configuration':name,'arguments':extra,'passed':data['passed'],'checks':len(data.get('checks',[])),'failures':data.get('failures',[]),'error':data.get('error')})
+                  finally:
+                      if p.poll() is None:
+                          p.terminate()
+                          try:p.wait(timeout=10)
+                          except subprocess.TimeoutExpired:p.kill();p.wait()
+          assert hashlib.sha256(binary.read_bytes()).hexdigest()==before
+          summary={'binary_source_commit':'d817ecac60bb24d7bb380c4ec5f0d60bf1eaefe3','binary_sha256':before,'binary_unmodified':True,'production_defaults_modified':False,'runs':records}
+          (out/'updater-diagnostic.json').write_text(json.dumps(summary,indent=2))
+          print(json.dumps(summary,indent=2))
+          assert records[1]['passed'] and not records[1]['failures'],summary
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: toolisle-updater-diagnostic
+          path: ${{ runner.temp }}/updater-diagnostic/
+          retention-days: 14
+          if-no-files-found: error

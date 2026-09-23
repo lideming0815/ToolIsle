@@ -418,9 +418,21 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
         focusClipboardTabIfNeeded()
     }
     
+    func refreshGiteeNotchSize(leavingGitee: Bool = false) {
+        guard notchState == .open,
+              leavingGitee || (coordinator.currentView == .giteeIssues && !Defaults[.enableMinimalisticUI]) else { return }
+        // Leaving the optional page restores Atoll's existing sizing calculation;
+        // otherwise a tall Gitee mouse region would linger over the Home page.
+        let target = calculateDynamicNotchSize()
+        if notchSize != target { notchSize = target }
+    }
+
     private func calculateDynamicNotchSize() -> CGSize {
         let baseSize = Defaults[.enableMinimalisticUI] ? minimalisticOpenNotchSize(isDynamicIslandMode: shouldUseDynamicIslandMode(for: screen)) : openNotchSize
         var adjustedSize = baseSize
+        if coordinator.currentView == .giteeIssues && !Defaults[.enableMinimalisticUI] {
+            return GINotchLayout.shared.size(base: baseSize, screenName: screen)
+        }
 
         if coordinator.currentView == .notes || coordinator.currentView == .clipboard {
             let preferred = coordinator.notesLayoutState.preferredHeight
@@ -508,8 +520,8 @@ class DynamicIslandViewModel: NSObject, ObservableObject {
                 alert.addButton(withTitle: String(localized: "OK"))
                 alert.runModal()
 
-                NSApp.setActivationPolicy(.accessory)
-                NSApp.deactivate()
+                GIReaderSession.shared.restorePolicy()
+                if !GIReaderSession.shared.isOpen { NSApp.deactivate() }
             }
 
         case .notDetermined:

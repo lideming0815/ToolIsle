@@ -99,7 +99,7 @@ class DynamicIslandViewCoordinator: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var hoverOpenSuppressedUntil: Date = .distantPast
     
-    private static let tabOrder: [NotchViews] = [.home, .shelf, .timer, .stats, .llmUsage, .colorPicker, .notes, .clipboard, .terminal, .extensionExperience]
+    private static let tabOrder: [NotchViews] = [.home, .shelf, .timer, .stats, .llmUsage, .colorPicker, .notes, .clipboard, .terminal, .extensionExperience, .giteeIssues]
     
     /// Direction of the most recent tab switch (true = forward/right, false = backward/left)
     @Published var tabSwitchForward: Bool = true
@@ -152,20 +152,28 @@ class DynamicIslandViewCoordinator: ObservableObject {
     
     @AppStorage("hudReplacement") var hudReplacement: Bool = true
     
-    @AppStorage("preferred_screen_name") var preferredScreen = NSScreen.main?.localizedName ?? "Unknown" {
+    // Empty means automatic. Do not persist whichever display had keyboard focus
+    // at launch; resolve the active built-in display again after every hot-plug.
+    @AppStorage("preferred_screen_name") var preferredScreen = "" {
         didSet {
-            selectedScreen = preferredScreen
+            selectedScreen = NotchDisplaySelection.screen(
+                preferredName: preferredScreen,
+                allowsFallback: Defaults[.automaticallySwitchDisplay]
+            )?.localizedName ?? "Unknown"
             NotificationCenter.default.post(name: Notification.Name.selectedScreenChanged, object: nil)
         }
     }
     
-    @Published var selectedScreen: String = NSScreen.main?.localizedName ?? "Unknown"
+    @Published var selectedScreen: String = NotchDisplaySelection.screen()?.localizedName ?? "Unknown"
 
     @Published var optionKeyPressed: Bool = true
     private let extensionNotchExperienceManager = ExtensionNotchExperienceManager.shared
     
     private init() {
-        selectedScreen = preferredScreen
+        selectedScreen = NotchDisplaySelection.screen(
+            preferredName: preferredScreen,
+            allowsFallback: Defaults[.automaticallySwitchDisplay]
+        )?.localizedName ?? "Unknown"
         Defaults.publisher(.timerDisplayMode)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] change in
@@ -216,6 +224,13 @@ class DynamicIslandViewCoordinator: ObservableObject {
             .store(in: &cancellables)
 
         handleExtensionExperienceSnapshot(extensionNotchExperienceManager.activeExperiences)
+
+        // Only the new feature is reset when its opt-in switch is turned off.
+        Defaults.publisher(.enableGiteeReader, options: [])
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] change in
+                if !change.newValue, self?.currentView == .giteeIssues { self?.currentView = .home }
+            }.store(in: &cancellables)
 
         // Observe all tab-affecting settings to enforce minimum notch width
         Publishers.MergeMany(

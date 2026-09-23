@@ -96,8 +96,8 @@ struct CameraPreviewView: View {
                         NSWorkspace.shared.open(settingsURL)
                     }
                 }
-                NSApp.setActivationPolicy(.accessory)
-                NSApp.deactivate()
+                GIReaderSession.shared.restorePolicy()
+                if !GIReaderSession.shared.isOpen { NSApp.deactivate() }
             }
         case .notDetermined:
             isRequestingAuthorization = true

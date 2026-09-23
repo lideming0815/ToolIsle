@@ -48,25 +48,18 @@ struct DynamicNotchApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("dynamic.island", systemImage: "mountain.2.fill", isInserted: $showMenuBarIcon) {
+        MenuBarExtra("ToolIsle", systemImage: "mountain.2.fill", isInserted: $showMenuBarIcon) {
             Button("Settings") {
                 SettingsWindowController.shared.showWindow()
             }
+            Button("Gitee Issues…") { GIReaderWindowController.shared.show() }
             CheckForUpdatesView(updater: updaterController.updater)
             Divider()
-            Button("Restart Atoll") {
-                guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
-
-                let workspace = NSWorkspace.shared
-
-                if let appURL = workspace.urlForApplication(withBundleIdentifier: bundleIdentifier)
-                {
-
-                    let configuration = NSWorkspace.OpenConfiguration()
-                    configuration.createsNewApplicationInstance = true
-
-                    workspace.openApplication(at: appURL, configuration: configuration)
-                }
+            Button("Restart ToolIsle") {
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.createsNewApplicationInstance = true
+                NSWorkspace.shared.openApplication(
+                    at: Bundle.main.bundleURL, configuration: configuration)
 
                 NSApplication.shared.terminate(self)
             }
@@ -164,6 +157,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         installTopMenuItemsIfNeeded()
+        GIReaderSession.shared.applicationBecameActive()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        !GIReaderSession.shared.reopen()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -573,6 +571,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else if coordinator.currentView == .clipboard {
             // Clipboard has its own fixed height source; don't inherit the notes layout state.
             baseSize.height = max(baseSize.height, NotesLayoutState.list.preferredHeight)
+        } else if coordinator.currentView == .giteeIssues {
+            baseSize = GINotchLayout.shared.size(base: baseSize, screenName: vm.screen)
         } else if coordinator.currentView == .terminal {
             let screenHeight = NSScreen.main?.visibleFrame.height ?? 800
             let maxFraction = Defaults[.terminalMaxHeightFraction]
@@ -634,6 +634,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Adds Dynamic Island shadow/top insets on non-notch screens, or top bleed on physical-notch screens.
     private func adjustedSizeForScreen(_ baseSize: CGSize, screen: NSScreen) -> CGSize {
         var adjusted = baseSize
+        if coordinator.currentView == .giteeIssues && !Defaults[.enableMinimalisticUI] {
+            let model = viewModels[screen] ?? vm
+            if model.notchState == .open {
+                model.refreshGiteeNotchSize()
+                adjusted = addShadowPadding(to: GINotchLayout.shared.size(base: openNotchSize, screen: screen), isMinimalistic: false)
+            }
+        }
         if shouldUseDynamicIslandMode(for: screen.localizedName) {
             adjusted.width += dynamicIslandShadowInset * 2
             adjusted.height += dynamicIslandTopOffset
@@ -694,6 +701,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Explicit fixture-only preview. No behavior changes during ordinary launches.
+        if ProcessInfo.processInfo.arguments.contains("--gitee-reader-demo") || ProcessInfo.processInfo.arguments.contains("--gitee-reader-smoke") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                GIStore.shared.startDemo()
+                GIReaderWindowController.shared.show()
+                GINotchPreviewProbe.run(app: self)
+                GIUXProbe.run(app: self)
+            }
+        }
         let userInfo: [String: Any] = [
             AtollDistributedNotifications.UserInfoKey.sourcePID: NSNumber(value: ProcessInfo.processInfo.processIdentifier)
         ]
@@ -805,6 +821,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateWindowSizeForTabSwitch()
             }
         }.store(in: &cancellables)
+
+        GINotchLayout.shared.$metrics.dropFirst().receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.coordinator.currentView == .giteeIssues else { return }
+                self.vm.refreshGiteeNotchSize()
+                self.viewModels.values.forEach { $0.refreshGiteeNotchSize() }
+                self.updateWindowSizeIfNeeded()
+            }.store(in: &cancellables)
 
         networkConnectivityManager.$hudState
             .removeDuplicates()
@@ -997,10 +1021,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.addObserver(
             forName: Notification.Name.automaticallySwitchDisplayChanged, object: nil, queue: nil
         ) { [weak self] _ in
-            guard let self = self, let window = self.window else { return }
-            DispatchQueue.main.async {
-                window.alphaValue =
-                    self.coordinator.selectedScreen == self.coordinator.preferredScreen ? 1 : 0
+            DispatchQueue.main.async { [weak self] in
+                self?.adjustWindowPosition(changeAlpha: true)
             }
         }
 
@@ -1010,15 +1032,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             self.cleanupWindows(shouldInvert: true)
 
-            if !Defaults[.showOnAllDisplays] {
-                let viewModel = self.vm
-                let window = self.createDynamicIslandWindow(
-                    for: NSScreen.main ?? NSScreen.screens.first!, with: viewModel)
-                self.window = window
-                self.adjustWindowPosition(changeAlpha: true)
-            } else {
-                self.adjustWindowPosition()
-            }
+            self.adjustWindowPosition(changeAlpha: !Defaults[.showOnAllDisplays])
         }
 
         DistributedNotificationCenter.default().addObserver(
@@ -1080,15 +1094,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         registerOptionalShortcutHandlers()
         updateFeatureShortcutAvailability()
 
-        if !Defaults[.showOnAllDisplays] {
-            let viewModel = self.vm
-            let window = createDynamicIslandWindow(
-                for: NSScreen.main ?? NSScreen.screens.first!, with: viewModel)
-            self.window = window
-            adjustWindowPosition(changeAlpha: true)
-        } else {
-            adjustWindowPosition(changeAlpha: true)
-        }
+        // Resolve the target before constructing the window to avoid a flash on
+        // the focused external display. The multi-display path remains unchanged.
+        adjustWindowPosition(changeAlpha: true)
         
         // Skip onboarding window and welcome sound under UI testing.
         if coordinator.firstLaunch && !AppRuntimeEnvironment.isUITesting {
@@ -1607,22 +1615,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         } else {
-            let selectedScreen: NSScreen
-
-            if let preferredScreen = NSScreen.screens.first(where: {
-                $0.localizedName == coordinator.preferredScreen
-            }) {
-                coordinator.selectedScreen = coordinator.preferredScreen
-                selectedScreen = preferredScreen
-            } else if Defaults[.automaticallySwitchDisplay], let mainScreen = NSScreen.main {
-                coordinator.selectedScreen = mainScreen.localizedName
-                selectedScreen = mainScreen
-            } else {
-                if let window = window {
-                    window.alphaValue = 0
-                }
+            guard let selectedScreen = NotchDisplaySelection.screen(
+                preferredName: coordinator.preferredScreen,
+                allowsFallback: Defaults[.automaticallySwitchDisplay]
+            ) else {
+                window?.alphaValue = 0
                 return
             }
+            coordinator.selectedScreen = selectedScreen.localizedName
             
             vm.screen = selectedScreen.localizedName
             vm.notchSize = getClosedNotchSize(screen: selectedScreen.localizedName)
@@ -1675,9 +1675,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.contentView = NSHostingView(rootView: OnboardingView(
                 onFinish: {
                     window.orderOut(nil)
-                    NSApp.setActivationPolicy(.accessory)
+                    GIReaderSession.shared.restorePolicy(excluding: window)
                     window.close()
-                    NSApp.deactivate()
+                    if !GIReaderSession.shared.isOpen { NSApp.deactivate() }
                 },
                 onOpenSettings: {
                     window.close()

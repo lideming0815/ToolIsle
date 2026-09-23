@@ -27,6 +27,8 @@ import Sparkle
 class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
     private var updaterController: SPUStandardUpdaterController?
+    private var isClosing = false
+    private var presentationGeneration = 0
     
     private init() {
         let window = NSWindow(
@@ -54,7 +56,7 @@ class SettingsWindowController: NSWindowController {
     private func setupWindow() {
         guard let window = window else { return }
         
-        window.title = "Atoll Settings"
+        window.title = "ToolIsle Settings"
         window.titlebarAppearsTransparent = false
         window.titleVisibility = .visible
         window.toolbarStyle = .unified
@@ -84,6 +86,10 @@ class SettingsWindowController: NSWindowController {
     }
     
     func showWindow() {
+        isClosing = false
+        presentationGeneration += 1
+        let generation = presentationGeneration
+        GIReaderSession.shared.settingsOpened()
         // Ensure window exists
         _ = window
 
@@ -109,7 +115,9 @@ class SettingsWindowController: NSWindowController {
         
         // Force window to front after activation
         DispatchQueue.main.async { [weak self] in
-            self?.window?.makeKeyAndOrderFront(nil)
+            guard let self, !self.isClosing, generation == self.presentationGeneration,
+                  let window = self.window, window.isVisible, !window.isMiniaturized else { return }
+            window.makeKeyAndOrderFront(nil)
         }
     }
     
@@ -119,10 +127,12 @@ class SettingsWindowController: NSWindowController {
     }
     
     private func relinquishFocus() {
+        isClosing = true
+        presentationGeneration += 1
         window?.orderOut(nil)
         
-        // Set app back to accessory mode immediately
-        NSApp.setActivationPolicy(.accessory)
+        // A still-open Gitee reader remains a normal switchable application window.
+        GIReaderSession.shared.settingsClosed(window)
     }
     
     deinit {
@@ -143,7 +153,7 @@ extension SettingsWindowController: NSWindowDelegate {
     
     func windowDidBecomeKey(_ notification: Notification) {
         // Ensure app is in regular mode when window becomes key
-        NSApp.setActivationPolicy(.regular)
+        if !isClosing && NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
     }
     
     func windowDidResignKey(_ notification: Notification) {
