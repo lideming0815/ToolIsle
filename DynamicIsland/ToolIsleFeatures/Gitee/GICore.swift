@@ -84,6 +84,36 @@ struct GIRepository: Codable, Identifiable, Hashable {
     }
 }
 
+/// Read-only label metadata. Invalid optional entries never discard an Issue.
+struct GIIssueLabel: Codable, Hashable {
+    let id: Int64?
+    let name: String
+    let color: String?
+    init(id: Int64? = nil, name: String, color: String? = nil) {
+        self.id = id; self.name = name; self.color = color
+    }
+    enum CodingKeys: String, CodingKey { case id, name, color }
+    init(from decoder: Decoder) throws {
+        if let text = try? decoder.singleValueContainer().decode(String.self) {
+            self.init(name: text); return
+        }
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self) else {
+            self.init(name: ""); return
+        }
+        self.init(id: try? c.decode(Int64.self, forKey: .id),
+                  name: (try? c.decode(String.self, forKey: .name)) ?? "",
+                  color: try? c.decode(String.self, forKey: .color))
+    }
+    var key: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var hexColor: String? {
+        guard var value = color?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        if value.hasPrefix("#") { value.removeFirst() }
+        if value.count == 3 { value = value.map { "\($0)\($0)" }.joined() }
+        guard value.count == 6, value.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return nil }
+        return value.uppercased()
+    }
+}
+
 struct GIIssue: Codable, Identifiable {
     let id: Int64
     let number: String
@@ -94,6 +124,32 @@ struct GIIssue: Codable, Identifiable {
     let user: GIUser?
     let updated_at: String?
     let comments: Int?
+    /// nil means the response did not provide usable label metadata; [] means none.
+    var labels: [GIIssueLabel]? = nil
+    enum CodingKeys: String, CodingKey { case id, number, title, state, body, html_url, user, updated_at, comments, labels }
+    init(id: Int64, number: String, title: String, state: String, body: String?, html_url: String?,
+         user: GIUser?, updated_at: String?, comments: Int?, labels: [GIIssueLabel]? = nil) {
+        self.id = id; self.number = number; self.title = title; self.state = state
+        self.body = body; self.html_url = html_url; self.user = user
+        self.updated_at = updated_at; self.comments = comments; self.labels = labels
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int64.self, forKey: .id)
+        number = try c.decode(String.self, forKey: .number)
+        title = try c.decode(String.self, forKey: .title)
+        state = try c.decode(String.self, forKey: .state)
+        body = try c.decodeIfPresent(String.self, forKey: .body)
+        html_url = try c.decodeIfPresent(String.self, forKey: .html_url)
+        user = try c.decodeIfPresent(GIUser.self, forKey: .user)
+        updated_at = try c.decodeIfPresent(String.self, forKey: .updated_at)
+        comments = try c.decodeIfPresent(Int.self, forKey: .comments)
+        labels = try? c.decode([GIIssueLabel].self, forKey: .labels)
+    }
+    var visibleLabels: [GIIssueLabel] {
+        var seen = Set<String>()
+        return (labels ?? []).filter { !$0.key.isEmpty && seen.insert($0.key).inserted }
+    }
     var stateTitle: String {
         switch state {
         case "open": return "开启"

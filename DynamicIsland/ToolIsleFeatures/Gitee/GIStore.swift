@@ -61,7 +61,10 @@ final class GIStore: ObservableObject {
     @Published private(set) var loadingList = false
     @Published private(set) var listFailures: [GIRepositoryFailure] = []
     @Published private(set) var lastSync: Date?
+    // Legacy test/source compatibility only. Project range is now represented by groups, never a hidden filter.
     @Published var repositoryFilter = ""
+    @Published var selectedLabels: Set<String> = []
+    @Published private(set) var collapsedProjects: Set<String> = []
     @Published var query = ""
     @Published var stateFilter = "unfinished"
     @Published var selectedListID: GIIssueRoute?
@@ -95,19 +98,27 @@ final class GIStore: ObservableObject {
     var visit: GIVisit? { history.current }
     var currentPage: GIPage? { visit.flatMap { pages[$0.route] } }
     var hasMoreIssues: Bool { !nextIssuePages.isEmpty }
-    var filteredItems: [GIListItem] {
-        items.filter { item in
-            (repositoryFilter.isEmpty || item.route.repository == repositoryFilter) &&
-            (stateFilter == "all" || (stateFilter == "unfinished" ? ["open", "progressing"].contains(item.issue.state) : item.issue.state == stateFilter)) &&
-            (query.isEmpty || item.issue.title.localizedCaseInsensitiveContains(query) || item.route.label.localizedCaseInsensitiveContains(query))
-        }
-    }
-    var hasActiveFilters: Bool { !query.isEmpty || !repositoryFilter.isEmpty || stateFilter != "all" }
+    var candidateItems: [GIListItem] { GIListPresentation.candidates(items, state: stateFilter, query: query) }
+    var labelFacets: [GILabelFacet] { GIListPresentation.facets(candidateItems) }
+    var filteredItems: [GIListItem] { GIListPresentation.filter(candidateItems, labels: selectedLabels) }
+    var issueGroups: [GIProjectGroup] { GIListPresentation.groups(filteredItems, repositories: selectedRepositories) }
+    var hasActiveFilters: Bool { !query.isEmpty || stateFilter != "all" || !selectedLabels.isEmpty }
     var filterSummary: String {
-        let states = ["all":"全部状态", "unfinished":"未完成", "open":"开启", "progressing":"进行中", "closed":"已关闭", "rejected":"已拒绝"]
-        return (repositoryFilter.isEmpty ? "全部已选项目" : repositoryFilter) + " · " + (states[stateFilter] ?? stateFilter) + (query.isEmpty ? "" : " · 搜索：" + query)
+        "全部已选项目 · " + GIListPresentation.stateTitle(stateFilter) +
+        (query.isEmpty ? "" : " · 搜索：" + query) + (selectedLabels.isEmpty ? "" : " · 标签 \(selectedLabels.count) 项")
     }
-    func clearFilters() { query = ""; repositoryFilter = ""; stateFilter = "all" }
+    func clearFilters() { query = ""; repositoryFilter = ""; stateFilter = "all"; selectedLabels = [] }
+    func toggleLabel(_ name: String) {
+        if selectedLabels.contains(name) { selectedLabels.remove(name) } else { selectedLabels.insert(name) }
+    }
+    private var collapseKey: String? { account.map { "toolisle.gitee.collapsedProjects.\($0.id)" } }
+    func setProjectExpanded(_ id: String, expanded: Bool) {
+        if expanded { collapsedProjects.remove(id) } else { collapsedProjects.insert(id) }
+        if !demoMode, let key = collapseKey { UserDefaults.standard.set(collapsedProjects.sorted(), forKey: key) }
+    }
+    func expandMatchingProjects() {
+        for group in issueGroups { setProjectExpanded(group.id, expanded: true) }
+    }
     private var selectionKey: String? { account.map { "toolisle.gitee.selection.\($0.id)" } }
 
     /// Called only by the opt-in reader surfaces, never by application launch.
@@ -137,6 +148,7 @@ final class GIStore: ObservableObject {
                 self.api = client
                 self.account = user
                 self.attemptedRestore = true
+                if let key = self.collapseKey { self.collapsedProjects = Set(UserDefaults.standard.stringArray(forKey: key) ?? []) }
                 if let key = self.selectionKey, let data = UserDefaults.standard.data(forKey: key),
                    let selection = try? JSONDecoder().decode([GIRepository].self, from: data) { self.selectedRepositories = selection }
                 self.refreshRepositories(source: "subscriptions", reset: true)
@@ -154,6 +166,7 @@ final class GIStore: ObservableObject {
         do { try GICredential.delete() }
         catch { connectionError = "无法移除钥匙串中的令牌，请重试。"; return }
         if let key = selectionKey { UserDefaults.standard.removeObject(forKey: key) }
+        if let key = collapseKey { UserDefaults.standard.removeObject(forKey: key) }
         deactivate()
         attemptedRestore = true
     }
@@ -169,7 +182,7 @@ final class GIStore: ObservableObject {
         nextIssuePages = [:]; history.reset(); selectedListID = nil
         repositoryPage = 1; moreRepositories = false
         loadingRepositories = false; loadingList = false; loadingDetail = false
-        query = ""; repositoryFilter = ""; stateFilter = "unfinished"
+        query = ""; repositoryFilter = ""; stateFilter = "unfinished"; selectedLabels = []; collapsedProjects = []
         listFailures = []; repositoryError = nil; detailError = nil; notice = nil; lastSync = nil
         loadRemoteImages = false
     }
@@ -381,6 +394,25 @@ final class GIStore: ObservableObject {
                 state: "progressing", body: nil, html_url: route.url.absoluteString,
                 user: account, updated_at: "2026-09-22T08:30:00+08:00", comments: 0)
             return GIListItem(route: route, issue: issue)
+        }
+    }
+    /// Explicit synthetic UI regression only. Never changes credentials or saved project choices.
+    func installLabelFixtures() {
+        guard demoMode, ProcessInfo.processInfo.arguments.contains("--gitee-label-probe") else { return }
+        selectedRepositories = [
+            GIRepository(id: -1, full_name: Self.demoA.repository, name: "协作工作台 · 演示", description: nil, html_url: nil),
+            GIRepository(id: -2, full_name: Self.demoB.repository, name: "共享组件 · 演示", description: nil, html_url: nil)]
+        let many = (1...120).map { GIIssueLabel(name: "模块标签-\($0)", color: $0 % 2 == 0 ? "#5382C5" : "#B65E8A") }
+        items = (0..<12).map { n in
+            let route = n == 0 ? Self.demoA : (n == 6 ? Self.demoB : GIIssueRoute(repository: n < 6 ? Self.demoA.repository : Self.demoB.repository, number: "ITAG\(n)"))
+            let state = ["open", "progressing", "closed"][n % 3]
+            let labels = [GIIssueLabel(name: n % 2 == 0 ? "bug" : "文档", color: "#D26843"),
+                          GIIssueLabel(name: "后端", color: "#5283CE"),
+                          GIIssueLabel(name: "优先处理", color: "#BD8534")] + (n == 0 ? many : [many[n]])
+            return GIListItem(route: route, issue: GIIssue(id: Int64(n + 1), number: route.number,
+                title: n == 0 ? Self.demoIssue(Self.demoA).title : ["改进关联讨论的阅读体验", "补充接口错误反馈与说明", "修复列表选择后的焦点问题"][n % 3],
+                state: state, body: nil, html_url: route.url.absoluteString, user: account,
+                updated_at: "2026-09-22T08:30:00+08:00", comments: 0, labels: labels))
         }
     }
     static let demoA = GIIssueRoute(repository: "toolisle-demo/workbench", number: "IDEMOA")

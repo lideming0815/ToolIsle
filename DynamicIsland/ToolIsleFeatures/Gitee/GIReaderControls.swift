@@ -39,22 +39,15 @@ struct GICopyIssueButton: View {
 struct GIIssueRow: View {
     let item: GIListItem
     let selected: Bool
-    @State private var hover = false
     var body: some View {
-        HStack(alignment: .center, spacing: 6) {
-            VStack(alignment: .leading, spacing: 7) {
-                Text(item.issue.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
-                HStack(spacing: 5) {
-                    Text(item.route.repository).lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 0)
-                    Text(item.issue.stateTitle)
-                }.font(.caption2).foregroundStyle(.secondary)
-                Text("#\(item.issue.number) · \(String((item.issue.updated_at ?? "").prefix(16)).replacingOccurrences(of: "T", with: " "))")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            GICopyIssueButton(url: item.route.url).opacity(hover || selected ? 1 : 0.45)
-        }
-        .padding(.vertical, 6).contentShape(Rectangle()).onHover { hover = $0 }
+        VStack(alignment: .leading, spacing: 6) {
+            Text(item.issue.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+            GIIssueTags(issue: item.issue)
+            if let timestamp = item.issue.updated_at {
+                Text(String(timestamp.prefix(16)).replacingOccurrences(of: "T", with: " "))
+                    .font(.system(size: 10)).foregroundStyle(.secondary).help(timestamp)
+            }
+        }.padding(.vertical, 5).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
     }
 }
 
@@ -62,10 +55,14 @@ struct GIFilterBar: View {
     @ObservedObject private var store = GIStore.shared
     @FocusState private var searchFocused: Bool
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Text("Issues").font(.headline)
                 Spacer()
+                if store.issueGroups.contains(where: { store.collapsedProjects.contains($0.id) }) {
+                    Button { store.expandMatchingProjects() } label: { Image(systemName: "rectangle.expand.vertical") }
+                        .help("展开匹配项目").buttonStyle(.borderless)
+                }
                 Button { store.refreshIssues(reset: true) } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless).disabled(store.loadingList || store.demoMode)
                     .help("刷新已选项目，不改变筛选条件")
@@ -79,42 +76,19 @@ struct GIFilterBar: View {
                 }.buttonStyle(.plain).opacity(store.query.isEmpty ? 0 : 1)
                     .disabled(store.query.isEmpty).help("清空搜索")
             }.padding(8).background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { project.frame(width: 170); state.frame(width: 150) }
-                VStack(spacing: 8) { project; state }
-            }
+            GIStatusFilters()
+            GILabelFilters()
             HStack {
                 Text("匹配 \(store.filteredItems.count) / 已加载 \(store.items.count)")
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 4)
                 if store.hasActiveFilters {
                     Button("清除筛选") { store.clearFilters() }.buttonStyle(.borderless).font(.caption)
-                        .help("全部已选项目、全部状态，并清空搜索；不修改查看项目")
+                        .help("全部状态，清空搜索和标签；不修改查看项目、分组折叠或当前阅读")
                 }
             }
         }.padding(12)
         .accessibilityIdentifier("gitee-filter-bar")
         .onReceive(NotificationCenter.default.publisher(for: .giteeFocusFilters)) { _ in searchFocused = true }
-    }
-    private var project: some View {
-        HStack {
-            Text("项目").font(.caption).foregroundStyle(.secondary)
-            Picker("项目", selection: $store.repositoryFilter) {
-                Text("全部已选项目").tag("")
-                ForEach(store.selectedRepositories) { Text($0.full_name).tag($0.path) }
-            }.labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity)
-                .help(store.repositoryFilter.isEmpty ? "仅筛选本机已选项目，不改变 Watch / Star" : store.repositoryFilter)
-        }
-    }
-    private var state: some View {
-        HStack {
-            Text("状态").font(.caption).foregroundStyle(.secondary)
-            Picker("状态", selection: $store.stateFilter) {
-                Text("未完成").tag("unfinished"); Text("全部状态").tag("all")
-                Text("开启").tag("open"); Text("进行中").tag("progressing")
-                Text("已关闭").tag("closed"); Text("已拒绝").tag("rejected")
-            }.labelsHidden().pickerStyle(.menu).frame(maxWidth: .infinity)
-                .help("仅筛选已加载的结果；未完成包含开启与进行中")
-        }
     }
 }

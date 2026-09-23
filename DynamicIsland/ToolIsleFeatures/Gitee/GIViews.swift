@@ -117,7 +117,7 @@ struct GINotchView: View {
                             action("检查查看项目") { GISettingsNavigation.shared.open() }
                         }
                     } else if store.filteredItems.isEmpty {
-                        message("当前筛选没有匹配的 Issue", detail: "已加载 \(store.items.count) 条，均被项目、状态或搜索条件过滤。")
+                        message("当前筛选没有匹配的 Issue", detail: "已加载 \(store.items.count) 条，均被状态、标签或搜索条件过滤。")
                         action("清除筛选，显示已加载 Issues") {
                             store.clearFilters()
                         }
@@ -227,7 +227,7 @@ struct GIReaderRootView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .frame(minWidth: 720, minHeight: 420)
         .onReceive(NotificationCenter.default.publisher(for: .giteeFocusFilters)) { _ in showList = true }
-        .onAppear { store.activate() }
+        .onAppear { store.activate(); GILabelProbe.run() }
         .onChange(of: enabled) { _, value in if value { store.activate() } }
     }
     private var header: some View {
@@ -241,14 +241,14 @@ struct GIReaderRootView: View {
             Text(store.demoMode ? "Gitee · 离线演示" : "Gitee Issues").font(.headline)
             Spacer(minLength: 8)
             if let visit = store.visit {
-                GICopyIssueButton(url: visit.route.url)
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
                 Menu { 
                     Button("缩小正文") { store.textScale = max(0.85, store.textScale - 0.1) }
                     Button("放大正文") { store.textScale = min(1.6, store.textScale + 0.1) }
                     Toggle("加载 Gitee 远程图片", isOn: $store.loadRemoteImages)
 
                 } label: { Image(systemName: "textformat.size") }.help("阅读选项")
+                GICopyIssueButton(url: visit.route.url)
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
                 Button { store.loadCurrent(force: true) } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(store.loadingDetail || store.demoMode).help("刷新当前 Issue").keyboardShortcut("r", modifiers: .command)
                 Button { store.browserOpen() } label: { Image(systemName: "arrow.up.right.square") }.help("在 Gitee 中打开")
@@ -332,9 +332,28 @@ private struct GIIssueListView: View {
                 List(selection: Binding<GIIssueRoute?>(get: { store.selectedListID }, set: { value in
                     if let value { store.open(value, fromList: true) }
                 })) {
-                    ForEach(store.filteredItems) { item in
-                        GIIssueRow(item: item, selected: store.selectedListID == item.route).tag(item.route)
-                            .contextMenu { Button("复制链接") { GIPasteboard.copy(item.route.url.absoluteString) } }
+                    ForEach(store.issueGroups) { group in
+                        Section {
+                            Button {
+                                store.setProjectExpanded(group.id, expanded: store.collapsedProjects.contains(group.id))
+                            } label: {
+                                HStack(spacing: 7) {
+                                    Image(systemName: store.collapsedProjects.contains(group.id) ? "chevron.right" : "chevron.down")
+                                        .font(.system(size: 10, weight: .semibold)).frame(width: 12)
+                                    Text(group.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                                    Spacer(minLength: 2)
+                                    Text("\(group.items.count)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                            }.buttonStyle(.plain).help(group.path + " · 当前匹配 \(group.items.count) 条")
+                                .listRowSeparator(.hidden)
+                                .accessibilityValue(store.collapsedProjects.contains(group.id) ? "已折叠" : "已展开")
+                            if !store.collapsedProjects.contains(group.id) {
+                                ForEach(group.items) { item in
+                                    GIIssueRow(item: item, selected: store.selectedListID == item.route).tag(item.route)
+                                        .contextMenu { Button("复制链接") { GIPasteboard.copy(item.route.url.absoluteString) } }
+                                }
+                            }
+                        }
                     }
                 }.listStyle(.inset)
             }
