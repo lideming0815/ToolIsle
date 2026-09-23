@@ -85,7 +85,9 @@ struct GIChipTray<Overflow: View>: View {
                 }.frame(height: Self.height)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Do not feed the previous chip row's intrinsic width back into
+        // NSHostingView's minimum size. It must be possible to shrink again.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         // Measure this tray locally. A shared PreferenceKey was reduced across sibling
         // trays and left every instance at its 220pt fallback, hiding the third status.
         .background(GeometryReader { proxy in

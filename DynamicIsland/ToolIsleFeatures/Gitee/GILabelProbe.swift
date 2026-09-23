@@ -85,14 +85,16 @@ import WebKit
                     check(await waitForReading(window), "reading body survives filter changes in \(dark ? "dark" : "light") appearance")
                     capture(window, dark ? "labels-reader-dark" : "labels-reader-light")
                     for sidebar in [260, 320, 380] {
+                        // NSHostingView can emit geometry synchronously during attachment.
+                        // Start the sample before constructing or attaching the view.
+                        let start = trays.count
                         let filterWindow = NSWindow(contentRect: NSRect(x: 150, y: 150, width: CGFloat(sidebar), height: 330), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
                         filterWindow.isReleasedWhenClosed = false
                         filterWindow.contentView = NSHostingView(rootView: GIFilterBar().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top))
-                        let start = trays.count
                         filterWindow.makeKeyAndOrderFront(nil); await pause()
-                        let expected = Double(sidebar - 24) // GIFilterBar's horizontal padding, not a guessed screen width.
+                        let expected = CGFloat(sidebar - 24) // GIFilterBar's horizontal padding, not a guessed screen width.
                         let status = Array(trays.dropFirst(start)).filter {
-                            $0["kind"] as? String == "status" && abs(($0["width"] as? Double ?? 0) - expected) < 1
+                            $0["kind"] as? String == "status" && abs(($0["width"] as? CGFloat ?? 0) - expected) < 1
                         }
                         check(!status.isEmpty, "measured status geometry at \(sidebar)pt in \(dark ? "dark" : "light")")
                         check(!status.isEmpty && status.allSatisfy {
@@ -103,8 +105,10 @@ import WebKit
                         if sidebar == 260 {
                             let before = trays.count
                             filterWindow.setContentSize(NSSize(width: 380, height: 330)); await pause()
-                            check(trays.dropFirst(before).contains { $0["kind"] as? String == "status" && abs(($0["width"] as? Double ?? 0) - 356) < 1 }, "live resize measures expanded width in \(dark ? "dark" : "light")")
+                            check(trays.dropFirst(before).contains { $0["kind"] as? String == "status" && abs(($0["width"] as? CGFloat ?? 0) - 356) < 1 }, "live resize measures expanded width in \(dark ? "dark" : "light")")
+                            let shrinking = trays.count
                             filterWindow.setContentSize(NSSize(width: 260, height: 330)); await pause()
+                            check(trays.dropFirst(shrinking).contains { $0["kind"] as? String == "status" && abs(($0["width"] as? CGFloat ?? 0) - 236) < 1 }, "live resize returns to compact width in \(dark ? "dark" : "light")")
                         }
                         filterWindow.close()
                     }
