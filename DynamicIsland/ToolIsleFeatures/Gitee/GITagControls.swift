@@ -148,7 +148,7 @@ struct GIStatusFilters: View {
             HStack {
                 Text("状态").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                if !GIListPresentation.states.prefix(3).contains(store.stateFilter) {
+                if !GIListPresentation.states.prefix(4).contains(store.stateFilter) {
                     Text("当前：\(GIListPresentation.stateTitle(store.stateFilter))").font(.caption2).foregroundStyle(.secondary)
                         .lineLimit(1).help(GIListPresentation.stateTitle(store.stateFilter))
                 }

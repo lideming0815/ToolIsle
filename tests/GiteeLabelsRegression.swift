@@ -52,11 +52,14 @@ import Foundation
         expect(groups.map(\.title) == [r2.path,r1.path], "duplicate names disambiguated")
         expect(groups.map(\.id) == ["repo:2","repo:1"], "persistent ID not display name")
         expect(GIListPresentation.groups(pending,repositories:[r1,r2]).count == 2, "group after filtering")
-        expect(Array(GIListPresentation.states.prefix(3)) == ["unfinished","progressing","closed"], "requested state priority")
+        expect(GIListPresentation.states == ["all", "unfinished", "progressing", "closed", "open", "rejected"], "All is first and other states preserve their relative order")
+        expect(GIListPresentation.stateTitle(GIListPresentation.states[0]) == "全部", "first state has the All label")
+        expect(GIListPresentation.candidates(all,state:"all",query:"").count == all.count, "All includes every loaded state")
+        expect(GIListPresentation.candidates(all,state:"unfinished",query:"").count == pending.count, "reordering does not change unfinished semantics")
         for width in [212.0,217,220,236,260,296,356,600] {
-            let plan = GIChipPacking.pack(widths:[58,58,58,44,44,58],available:width,maxRows:1,overflow:28)
+            let plan = GIChipPacking.pack(widths:[34,45,45,45,34,45],available:width,maxRows:1,overflow:28)
             expect(plan.rows.count == 1,"single-line state")
-            if width >= 217 { expect(plan.rows[0].prefix(3) == [0,1,2],"three priority states fit") }
+            if width >= 217 { expect(plan.rows[0].prefix(4) == [0,1,2,3],"All and the three common states fit") }
         }
         for width in [1.0,100,212,236,296,356,600] {
             for n in [0,1,2,8,20,100,500] {

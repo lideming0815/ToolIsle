@@ -16,8 +16,8 @@ struct GIProjectGroup: Identifiable {
 }
 
 enum GIListPresentation {
-    // Ordering is deliberate: these three remain outside the overflow at the minimum sidebar width.
-    static let states = ["unfinished", "progressing", "closed", "all", "open", "rejected"]
+    // Show All first, followed by the three common states. Selection defaults are independent of display order.
+    static let states = ["all", "unfinished", "progressing", "closed", "open", "rejected"]
     static func stateTitle(_ state: String) -> String {
         ["unfinished":"未完成", "progressing":"进行中", "closed":"已关闭",
          "all":"全部", "open":"开启", "rejected":"已拒绝"][state] ?? state

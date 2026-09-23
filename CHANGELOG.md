@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Settings: add/edit/delete accounts, toggle provider, validation with inline errors
 
 ### Changed
+- **ToolIsle status filter order**: show All first, followed by Unfinished, In progress and Closed, while preserving the single-row checkless layout and the current/default selection. (#10)
 - **ToolIsle compact selection**: remove checkmarks and their reserved width from status/label filters and label popovers. Keep selection backgrounds, outlines, accessible state and reading history.
 - Fixed lyrics/timer overlap in the minimalistic music player: the lyrics height allocation in `calculateDynamicHeight` was 10pt short of what the window sizing function reserved, so the timer section was pushed past its allocation in Dynamic Island mode. The shared constant now accounts for the full 10pt top padding + 40pt content height. (#812)
 - **Calendar Zoom join button**: clicking "Join" on a Zoom conference event now opens the original HTTPS join URL directly instead of converting it to a `zoommtg:` deep link, which was broken on macOS. (#813)
