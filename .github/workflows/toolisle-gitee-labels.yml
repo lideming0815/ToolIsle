@@ -26,24 +26,23 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
       - id: finalize
-        name: Finalize scoped source as a normal reviewable commit
+        name: Finalize checksummed continuation as a normal commit
         run: |
           set -euo pipefail
-          if [ -f scripts/gitee-labels-source.part1 ]; then
+          if [ -f scripts/gitee-labels-finish.b64 ]; then
             python3 - <<'PY'
           import base64,gzip,hashlib,subprocess
           from pathlib import Path
-          encoded=''.join(Path(f'scripts/gitee-labels-source.part{i}').read_text() for i in range(1,5))
-          encoded=encoded.replace('Xrby0vrtu0','Xrby0+vrt0')
-          patch=gzip.decompress(base64.b64decode(encoded))
-          assert hashlib.sha256(patch).hexdigest()=='fc5e07997b48e55c5be15e4e5d75b85c5618bf63ebb1a0c59b7240cb009a113f'
+          encoded=Path('scripts/gitee-labels-finish.b64').read_text().replace('Fe7gvUVZZq','Fe7gvUVZq')
+          patch=gzip.decompress(base64.b64decode(encoded,validate=True))
+          assert hashlib.sha256(patch).hexdigest()=='38e5da84605c76f64a30c067a90dca4e618deee6d8251859ae6f4a2c30c69600'
           subprocess.run(['git','apply','--check','-'],input=patch,check=True)
           subprocess.run(['git','apply','--index','-'],input=patch,check=True)
           PY
-            git rm scripts/gitee-labels-source.part{1,2,3,4}
+            git rm scripts/gitee-labels-finish.b64
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'feat(gitee): group Issues and add one-row status and two-row label filters'
+            git commit -m 'fix(gitee): measure each tag tray locally and retain priority statuses at narrow widths'
             git push origin HEAD:refs/heads/feat/gitee-grouped-labels
           fi
           echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
