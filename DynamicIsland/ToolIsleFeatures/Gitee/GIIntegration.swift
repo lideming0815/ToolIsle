@@ -11,7 +11,7 @@ struct GITabOverflow: ViewModifier {
             }
             .scrollIndicators(.visible)
             .frame(height: 32)
-            .help("标签较多时可横向滚动；菜单栏也可打开 Gitee Issues")
+            .help("标签较多时可横向滚动；菜单栏也可打开 Issue 阅读器")
         } else {
             content
         }

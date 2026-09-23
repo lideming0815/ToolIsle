@@ -95,7 +95,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .media: return String(localized: "Media")
         case .devices: return String(localized: "Devices")
         case .extensions: return String(localized: "Extensions")
-        case .gitee: return "Gitee"
+        case .gitee: return "Gitee / GitLab"
         case .timer: return String(localized: "Timer")
         case .calendar: return String(localized: "Calendar")
         case .hudAndOSD: return String(localized: "Controls")
@@ -225,7 +225,7 @@ enum LockScreenSettingsSection: String, CaseIterable, Identifiable {
 
 private enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = [
-        SettingsSearchEntry(tab: .gitee, title: "Gitee 账户与项目", keywords: ["gitee", "issue", "令牌", "账户", "项目", "watch", "star"], highlightID: nil),
+        SettingsSearchEntry(tab: .gitee, title: "Gitee / GitLab 账户与项目", keywords: ["gitlab", "gitee", "issue", "令牌", "账户", "项目", "watch", "star"], highlightID: nil),
         // General
         SettingsSearchEntry(tab: .general, title: "Enable Minimalistic UI", keywords: ["minimalistic", "ui mode", "general"], highlightID: SettingsTab.general.highlightID(for: "Enable Minimalistic UI")),
         SettingsSearchEntry(tab: .general, title: "Menubar icon", keywords: ["menu bar", "status bar", "icon"], highlightID: SettingsTab.general.highlightID(for: "Menubar icon")),

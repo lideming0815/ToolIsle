@@ -141,14 +141,14 @@ struct GITagFace: View {
 struct GIStatusFilters: View {
     @ObservedObject private var store = GIStore.shared
     private var states: [String] {
-        GIListPresentation.states + Set(store.items.map { $0.issue.state }).subtracting(GIListPresentation.states).sorted()
+        store.availableStates + Set(store.items.map { $0.issue.state }).subtracting(store.availableStates).sorted()
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text("状态").font(.caption2).foregroundStyle(.secondary)
                 Spacer()
-                if !GIListPresentation.states.prefix(4).contains(store.stateFilter) {
+                if !store.availableStates.prefix(4).contains(store.stateFilter) {
                     Text("当前：\(GIListPresentation.stateTitle(store.stateFilter))").font(.caption2).foregroundStyle(.secondary)
                         .lineLimit(1).help(GIListPresentation.stateTitle(store.stateFilter))
                 }

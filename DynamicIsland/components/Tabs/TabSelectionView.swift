@@ -60,6 +60,7 @@ struct TabSelectionView: View {
     @Default(.showMirror) private var showMirror
     @Default(.showStandardMediaControls) private var showStandardMediaControls
     @Default(.enableMinimalisticUI) private var enableMinimalisticUI
+    @ObservedObject private var issueStore = GIStore.shared
     @Default(.enableGiteeReader) private var enableGiteeReader
     @Namespace var animation
     
@@ -113,7 +114,7 @@ struct TabSelectionView: View {
             }
         }
         if enableGiteeReader {
-            tabsArray.append(TabModel(label: "Gitee", icon: "text.bubble", view: .giteeIssues))
+            tabsArray.append(TabModel(label: issueStore.platformName, icon: "text.bubble", view: .giteeIssues))
         }
         return tabsArray
     }

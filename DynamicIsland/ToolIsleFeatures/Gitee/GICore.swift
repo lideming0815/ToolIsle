@@ -5,6 +5,87 @@ import Foundation
 import FoundationNetworking
 #endif
 
+/// The optional reader has one active site. Gitee's existing persistence keys stay unchanged.
+struct GIReaderRemote: Codable, Hashable {
+    let gitLabURL: URL?
+    static let gitee = GIReaderRemote(gitLabURL: nil)
+    var isGitLab: Bool { gitLabURL != nil }
+    var usesHTTP: Bool { gitLabURL?.scheme == "http" }
+    var name: String { isGitLab ? "GitLab" : "Gitee" }
+    var webURL: URL { gitLabURL ?? URL(string: "https://gitee.com")! }
+    var storagePrefix: String {
+        guard let gitLabURL else { return "toolisle.gitee" }
+        return "toolisle.gitlab." + Data(gitLabURL.absoluteString.utf8).base64EncodedString()
+    }
+    var credentialService: String {
+        isGitLab ? "io.github.lideming0815.toolisle.gitlab-reader" : "io.github.lideming0815.toolisle.gitee-reader"
+    }
+    var credentialAccount: String { gitLabURL?.absoluteString ?? "gitee.com" }
+    var imageOrigins: [String] {
+        guard isGitLab else { return ["https://gitee.com", "https://foruda.gitee.com", "https://images.gitee.com"] }
+        var c = URLComponents(url: webURL, resolvingAgainstBaseURL: false)!
+        c.path = ""
+        return [c.url!.absoluteString]
+    }
+    var tokenURL: URL {
+        webURL.appendingPathComponent(isGitLab ? "-/user_settings/personal_access_tokens" : "profile/personal_access_tokens")
+    }
+    /// HTTP(S), optional port and reverse-proxy prefix. Never accept an API URL or credentials.
+    static func gitLab(_ input: String) throws -> Self {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.contains("\\"), !value.contains("%"),
+              !value.unicodeScalars.contains(where: { CharacterSet.whitespacesAndNewlines.contains($0) || CharacterSet.controlCharacters.contains($0) }),
+              var c = URLComponents(string: value), ["https", "http"].contains(c.scheme?.lowercased() ?? ""),
+              let host = c.host, !host.isEmpty, host.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || ".-:[]".contains($0)) }),
+              c.user == nil, c.password == nil,
+              c.query == nil, c.fragment == nil,
+              c.port == nil || (1...65535).contains(c.port!) else { throw GIServiceError.invalidServer }
+        let parts = c.path.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
+        guard !parts.contains(where: { $0 == "." || $0 == ".." }), !c.path.contains("//"),
+              !c.path.contains("/api/") else { throw GIServiceError.invalidServer }
+        c.scheme = c.scheme?.lowercased(); c.host = host.lowercased()
+        if c.port == (c.scheme == "http" ? 80 : 443) { c.port = nil }
+        while c.path.hasSuffix("/") { c.path.removeLast() }
+        guard let url = c.url else { throw GIServiceError.invalidServer }
+        return GIReaderRemote(gitLabURL: url)
+    }
+    func contains(_ url: URL) -> Bool {
+        guard url.user == nil, url.password == nil, url.scheme?.lowercased() == webURL.scheme else { return false }
+        if !isGitLab { return GIIssueLinks.hosts.contains(url.host?.lowercased() ?? "") && (url.port == nil || url.port == 443) }
+        let defaultPort = usesHTTP ? 80 : 443
+        guard url.host?.lowercased() == webURL.host?.lowercased(), (url.port ?? defaultPort) == (webURL.port ?? defaultPort) else { return false }
+        return webURL.path.isEmpty || url.path == webURL.path || url.path.hasPrefix(webURL.path + "/")
+    }
+    static func validProject(_ path: String) -> Bool {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        return parts.count >= 2 && parts.allSatisfy { GIRepositoryAddress.validSlug(String($0)) && $0 != "-" }
+    }
+    static func validIID(_ number: String) -> Bool {
+        !number.isEmpty && number.allSatisfy { $0.isASCII && $0.isNumber } && (Int64(number) ?? 0) > 0
+    }
+    func issueRoute(_ url: URL) -> GIIssueRoute? {
+        guard isGitLab, contains(url),
+              let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              !c.percentEncodedPath.contains("%") else { return nil }
+        let prefix = webURL.path.split(separator: "/").count
+        let parts = url.path.split(separator: "/").dropFirst(prefix).map(String.init)
+        guard parts.count >= 5, parts[parts.count-3] == "-", parts[parts.count-2] == "issues",
+              let number = parts.last, Self.validIID(number) else { return nil }
+        let project = parts.dropLast(3).joined(separator: "/")
+        guard Self.validProject(project) else { return nil }
+        return GIIssueRoute(repository: project, number: number, remote: self)
+    }
+}
+
+protocol GIIssueService: AnyObject, Sendable {
+    func cancel()
+    func user() async throws -> GIUser
+    func repositories(source: String, page: Int) async throws -> [GIRepository]
+    func issues(repository: String, page: Int) async throws -> [GIIssue]
+    func issue(_ route: GIIssueRoute) async throws -> GIIssue
+    func comments(_ route: GIIssueRoute, page: Int) async throws -> [GIComment]
+}
+
 struct GIUser: Codable, Hashable {
     let id: Int64
     let login: String
@@ -58,20 +139,22 @@ struct GIRepository: Codable, Identifiable, Hashable {
     let name: String
     let description: String?
     let html_url: String?
+    let gitLabPath: String?
     let repositoryPath: String?
     let namespace: GIRepositorySpace?
     let owner: GIRepositorySpace?
     enum CodingKeys: String, CodingKey {
-        case id, full_name, name, description, html_url, namespace, owner
+        case id, full_name, name, description, html_url, namespace, owner, gitLabPath
         case repositoryPath = "path"
     }
     init(id: Int64, full_name: String, name: String, description: String?, html_url: String?,
-         repositoryPath: String? = nil, namespace: GIRepositorySpace? = nil, owner: GIRepositorySpace? = nil) {
+         gitLabPath: String? = nil, repositoryPath: String? = nil, namespace: GIRepositorySpace? = nil, owner: GIRepositorySpace? = nil) {
         self.id = id; self.full_name = full_name; self.name = name
         self.description = description; self.html_url = html_url
-        self.repositoryPath = repositoryPath; self.namespace = namespace; self.owner = owner
+        self.gitLabPath = gitLabPath; self.repositoryPath = repositoryPath; self.namespace = namespace; self.owner = owner
     }
     var path: String {
+        if let gitLabPath { return GIReaderRemote.validProject(gitLabPath) ? gitLabPath : "" }
         let web = html_url.flatMap(GIRepositoryAddress.legacyPath)
         let fallback = GIRepositoryAddress.legacyPath(full_name)
         if let repo = repositoryPath, GIRepositoryAddress.validSlug(repo) {
@@ -171,9 +254,15 @@ struct GIComment: Codable, Identifiable {
 struct GIIssueRoute: Codable, Hashable {
     let repository: String
     let number: String
+    let remote: GIReaderRemote?
+    init(repository: String, number: String, remote: GIReaderRemote = .gitee) {
+        self.repository = repository; self.number = number
+        self.remote = remote.isGitLab ? remote : nil
+    }
     var url: URL {
-        var result = URL(string: "https://gitee.com")!
+        var result = (remote ?? .gitee).webURL
         for part in repository.split(separator: "/") { result.appendPathComponent(String(part)) }
+        if remote?.isGitLab == true { result.appendPathComponent("-") }
         result.appendPathComponent("issues")
         result.appendPathComponent(number)
         return result
@@ -192,7 +281,7 @@ enum GIIssueLinks {
 
     /// Only real user-clicked links reach this resolver. Do not run it over code blocks.
     /// Preserve issue-number case; Gitee identifiers are not integer issue IDs.
-    static func resolve(_ raw: String, relativeTo base: URL) -> GILinkTarget {
+    static func resolve(_ raw: String, relativeTo base: URL, remote: GIReaderRemote = .gitee) -> GILinkTarget {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               !trimmed.contains("\\"),
@@ -207,6 +296,12 @@ enum GIIssueLinks {
         if (c.queryItems ?? []).contains(where: { sensitive.contains($0.name.lowercased()) }) { return .blocked }
         guard scheme != "mailto" else { return .external(url) }
         guard let host = c.host?.lowercased(), !host.isEmpty else { return .blocked }
+        if remote.isGitLab {
+            if let route = remote.issueRoute(url) {
+                return .issue(route, fragment: c.fragment.flatMap { $0.isEmpty ? nil : $0 })
+            }
+            return .external(url)
+        }
         guard hosts.contains(host), c.port == nil || c.port == (scheme == "https" ? 443 : 80) else {
             return .external(url)
         }
@@ -312,16 +407,17 @@ struct GIRepositoryFailure: Identifiable {
 }
 
 enum GIServiceError: Error, LocalizedError {
-    case missingToken, forbidden, missing, throttled, response(Int), format, tooLarge, unsafeRedirect
+    case missingToken, forbidden, missing, throttled, response(Int), format, tooLarge, unsafeRedirect, invalidServer
     var errorDescription: String? {
         switch self {
-        case .missingToken: return "授权已失效，请重新连接 Gitee。"
+        case .invalidServer: return "请输入有效的 GitLab HTTP 或 HTTPS 站点地址，不含令牌、查询参数或 /api/v4。"
+        case .missingToken: return "授权已失效，请重新连接账户。"
         case .forbidden: return "当前账户没有权限，或接口暂时限制访问。请检查令牌权限后重试。"
         case .missing: return "该内容不存在，或当前账户没有访问权限。"
         case .throttled: return "请求过于频繁。请稍后手动重试。"
-        case .response(let code): return "Gitee 返回了错误（HTTP \(code)），请稍后重试。"
-        case .format: return "无法读取接口返回的内容；可在 Gitee 网页中打开。"
-        case .tooLarge: return "内容超过阅读器的安全大小限制，请在 Gitee 网页中打开。"
+        case .response(let code): return "平台返回了错误（HTTP \(code)），请稍后重试。"
+        case .format: return "无法读取接口返回的内容；可在平台网页中打开。"
+        case .tooLarge: return "内容超过阅读器的安全大小限制，请在平台网页中打开。"
         case .unsafeRedirect: return "接口发生了重定向。为保护令牌，未跟随该地址。"
         }
     }
@@ -333,7 +429,7 @@ enum GIServiceError: Error, LocalizedError {
             }
             if e.code == .timedOut { return "连接超时，请重试。" }
             if e.code == .cannotFindHost || e.code == .dnsLookupFailed {
-                return "无法解析 Gitee 地址，请检查网络或 DNS 设置。"
+                return "无法解析服务器地址，请检查网络或 DNS 设置。"
             }
         }
         // Never show an underlying URLSession error containing a credential-bearing URL.
@@ -347,7 +443,7 @@ final class GINoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable 
                     completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
 }
 
-final class GIAPI: @unchecked Sendable {
+final class GIAPI: GIIssueService, @unchecked Sendable {
     private let token: String
     private let session: URLSession
     init(token: String, configuration: URLSessionConfiguration = .ephemeral) {

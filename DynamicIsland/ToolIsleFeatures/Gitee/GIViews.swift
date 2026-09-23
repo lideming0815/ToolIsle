@@ -10,7 +10,7 @@ final class GIReaderWindowController: NSWindowController, NSWindowDelegate {
     private init() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 660),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "Gitee Issues · ToolIsle"
+        window.title = "Issues · ToolIsle"
         window.minSize = NSSize(width: 740, height: 480)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: GIReaderRootView())
@@ -64,13 +64,13 @@ struct GINotchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Label("Gitee Issues", systemImage: "text.bubble")
+                Label("\(store.platformName) Issues", systemImage: "text.bubble")
                     .font(.system(size: 13, weight: .semibold))
                 if store.demoMode { Text("演示").font(.caption2).foregroundStyle(secondary) }
                 Spacer(minLength: 4)
                 if store.loadingList || store.isConnecting {
                     ProgressView().controlSize(.mini).tint(.white)
-                        .accessibilityLabel("正在加载 Gitee")
+                        .accessibilityLabel("正在加载 \(store.platformName)")
                 }
                 Button { store.refreshIssues(reset: true) } label: {
                     Image(systemName: "arrow.clockwise").frame(width: 24, height: 24)
@@ -78,7 +78,7 @@ struct GINotchView: View {
                     .disabled(store.account == nil || store.loadingList || store.demoMode)
                 Button { GISettingsNavigation.shared.open() } label: {
                     Image(systemName: "gearshape").frame(width: 24, height: 24)
-                }.buttonStyle(.plain).help("Gitee 独立设置")
+                }.buttonStyle(.plain).help("\(store.platformName) 独立设置")
             }
             .frame(height: 24)
             .accessibilityIdentifier("gitee-notch-header")
@@ -95,16 +95,16 @@ struct GINotchView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if store.account == nil {
                         if store.isConnecting {
-                            message("正在连接 Gitee…", detail: "正在验证账户并恢复查看项目。")
+                            message("正在连接 \(store.platformName)…", detail: "正在验证账户并恢复查看项目。")
                         } else if let error = store.connectionError {
-                            message("Gitee 连接失败", detail: error)
+                            message("\(store.platformName) 连接失败", detail: error)
                             action("检查账户设置") { GISettingsNavigation.shared.open() }
                         } else {
-                            message("尚未连接 Gitee", detail: "连接账户后查看关注项目的 Issue。")
+                            message("尚未连接 \(store.platformName)", detail: "连接账户后查看关注项目的 Issue。")
                             action("连接与设置…") { GISettingsNavigation.shared.open() }
                         }
                     } else if store.selectedRepositories.isEmpty {
-                        message("尚未选择查看项目", detail: "在 Gitee 设置中从 Watch / Star 勾选项目。")
+                        message("尚未选择查看项目", detail: "在设置中从\(store.projectSourceTitle)勾选项目。")
                         action("选择查看项目…") { GISettingsNavigation.shared.open() }
                     } else if store.items.isEmpty {
                         if store.loadingList {
@@ -209,13 +209,13 @@ struct GIReaderRootView: View {
                 VStack(spacing: 18) {
                     Image(systemName: "text.bubble").font(.system(size: 34)).foregroundStyle(.secondary)
                     Text("阅读项目中的讨论").font(.title2.weight(.semibold))
-                    Text("在 Atoll 中查看 Gitee Issue，并沿着关联链接连续阅读。\n仅在启用并连接账户后请求 Gitee；不读取本地文件。")
+                    Text("在 Atoll 中查看 \(store.platformName) Issue，并沿着关联链接连续阅读。\n仅在启用并连接账户后请求 \(store.platformName)；不读取本地文件。")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
-                    Button("前往 Gitee 设置") { GISettingsNavigation.shared.open() }.buttonStyle(.borderedProminent)
+                    Button("前往 \(store.platformName) 设置") { GISettingsNavigation.shared.open() }.buttonStyle(.borderedProminent)
                 }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if store.account == nil {
-                GIEmptyState(symbol: "person.badge.key", title: "尚未连接 Gitee", detail: "账户、查看项目和阅读偏好统一在设置侧栏的 Gitee 页面管理。") {
-                    Button("打开 Gitee 设置") { GISettingsNavigation.shared.open() }.buttonStyle(.borderedProminent)
+                GIEmptyState(symbol: "person.badge.key", title: "尚未连接 \(store.platformName)", detail: "账户、查看项目和阅读偏好统一在设置侧栏的 \(store.platformName) 页面管理。") {
+                    Button("打开 \(store.platformName) 设置") { GISettingsNavigation.shared.open() }.buttonStyle(.borderedProminent)
                 }
             } else {
                 HSplitView {
@@ -238,23 +238,23 @@ struct GIReaderRootView: View {
                 .disabled(!store.history.canBack).help("后退，恢复阅读位置").keyboardShortcut("[", modifiers: .command)
             Button { store.moveHistory(1) } label: { Image(systemName: "chevron.right") }
                 .disabled(!store.history.canForward).help("前进").keyboardShortcut("]", modifiers: .command)
-            Text(store.demoMode ? "Gitee · 离线演示" : "Gitee Issues").font(.headline)
+            Text(store.demoMode ? "\(store.platformName) · 离线演示" : "\(store.platformName) Issues").font(.headline)
             Spacer(minLength: 8)
             if let visit = store.visit {
                 Menu { 
                     Button("缩小正文") { store.textScale = max(0.85, store.textScale - 0.1) }
                     Button("放大正文") { store.textScale = min(1.6, store.textScale + 0.1) }
-                    Toggle("加载 Gitee 远程图片", isOn: $store.loadRemoteImages)
+                    Toggle("加载 \(store.platformName) 远程图片", isOn: $store.loadRemoteImages)
 
                 } label: { Image(systemName: "textformat.size") }.help("阅读选项")
                 GICopyIssueButton(url: visit.route.url)
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                 Button { store.loadCurrent(force: true) } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(store.loadingDetail || store.demoMode).help("刷新当前 Issue").keyboardShortcut("r", modifiers: .command)
-                Button { store.browserOpen() } label: { Image(systemName: "arrow.up.right.square") }.help("在 Gitee 中打开")
+                Button { store.browserOpen() } label: { Image(systemName: "arrow.up.right.square") }.help("在 \(store.platformName) 中打开")
             }
             Button { GISettingsNavigation.shared.open() } label: { Image(systemName: "gearshape") }
-                .help("打开设置中的 Gitee 页面")
+                .help("打开设置中的 \(store.platformName) 页面")
         }
         .buttonStyle(.borderless).controlSize(.regular)
         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -296,7 +296,7 @@ struct GIReaderRootView: View {
                     GIEmptyState(symbol: "exclamationmark.bubble", title: "暂时无法打开", detail: error) {
                         HStack {
                             Button("重试") { store.loadCurrent(force: true) }
-                            Button("在 Gitee 打开") { store.browserOpen() }
+                            Button("在 \(store.platformName) 打开") { store.browserOpen() }
                         }
                     }
                 } else {
@@ -386,7 +386,7 @@ private struct GIIssueListView: View {
                                 }.frame(maxHeight: 250)
                                 Divider()
                                 HStack {
-                                    Button("Gitee 设置…") { showFailures = false; GISettingsNavigation.shared.open() }
+                                    Button("\(store.platformName) 设置…") { showFailures = false; GISettingsNavigation.shared.open() }
                                     Spacer()
                                     Button("重试失败项目") { showFailures = false; store.retryFailedRepositories() }
                                         .disabled(store.loadingList)
@@ -407,9 +407,14 @@ struct GIConnectionView: View {
     @State private var token = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("连接 Gitee", systemImage: "person.badge.key").font(.title2.weight(.semibold))
-            Text("输入个人访问令牌。阅读器只发送读取请求；令牌本身的权限仍由 Gitee 中的授权范围决定。")
+            Label("连接 \(store.platformName)", systemImage: "person.badge.key").font(.title2.weight(.semibold))
+            Text("输入个人访问令牌。阅读器只发送读取请求；令牌本身的权限仍由平台中的授权范围决定。")
                 .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if store.remote.isGitLab {
+                Text("使用具有 read_api 权限的个人访问令牌；仅 read_repository 不足以读取 Issue。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("连接站点：\(store.remote.webURL.absoluteString)").font(.caption).textSelection(.enabled)
+            }
             SecureField("个人访问令牌", text: $token).textFieldStyle(.roundedBorder)
                 .onSubmit { submit() }.disabled(store.isConnecting)
             if let error = store.connectionError { Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -422,9 +427,9 @@ struct GIConnectionView: View {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Divider()
             HStack {
-                Button("在 Gitee 管理令牌") { NSWorkspace.shared.open(URL(string: "https://gitee.com/profile/personal_access_tokens")!) }
+                Button("在 \(store.platformName) 管理令牌") { NSWorkspace.shared.open(store.remote.tokenURL) }
                 Spacer()
-                if store.account == nil { Button("先体验离线演示") { token = ""; store.startDemo() } }
+                if store.account == nil && !store.remote.isGitLab { Button("先体验离线演示") { token = ""; store.startDemo() } }
             }.controlSize(.small)
         }
     }

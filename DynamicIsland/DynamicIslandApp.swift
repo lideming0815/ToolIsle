@@ -52,7 +52,7 @@ struct DynamicNotchApp: App {
             Button("Settings") {
                 SettingsWindowController.shared.showWindow()
             }
-            Button("Gitee Issues…") { GIReaderWindowController.shared.show() }
+            Button("Gitee / GitLab Issues…") { GIReaderWindowController.shared.show() }
             CheckForUpdatesView(updater: updaterController.updater)
             Divider()
             Button("Restart ToolIsle") {

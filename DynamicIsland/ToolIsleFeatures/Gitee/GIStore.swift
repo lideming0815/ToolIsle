@@ -10,13 +10,12 @@ extension Defaults.Keys {
 }
 
 enum GICredential {
-    private static let service = "io.github.lideming0815.toolisle.gitee-reader"
-    private static var query: [String: Any] {
+    private static func query(_ remote: GIReaderRemote) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service, kSecAttrAccount as String: "gitee.com"]
+         kSecAttrService as String: remote.credentialService, kSecAttrAccount as String: remote.credentialAccount]
     }
-    static func read() throws -> String? {
-        var q = query
+    static func read(remote: GIReaderRemote = .gitee) throws -> String? {
+        var q = query(remote)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -26,18 +25,18 @@ enum GICredential {
               let value = String(data: data, encoding: .utf8) else { throw CredentialError() }
         return value
     }
-    static func save(_ token: String) throws {
+    static func save(_ token: String, remote: GIReaderRemote = .gitee) throws {
         let attributes: [String: Any] = [kSecValueData as String: Data(token.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let status = SecItemUpdate(query(remote) as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
-            var q = query
+            var q = query(remote)
             attributes.forEach { q[$0] = $1 }
             guard SecItemAdd(q as CFDictionary, nil) == errSecSuccess else { throw CredentialError() }
         } else if status != errSecSuccess { throw CredentialError() }
     }
-    static func delete() throws {
-        let status = SecItemDelete(query as CFDictionary)
+    static func delete(remote: GIReaderRemote = .gitee) throws {
+        let status = SecItemDelete(query(remote) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw CredentialError() }
     }
     struct CredentialError: LocalizedError {
@@ -48,6 +47,21 @@ enum GICredential {
 @MainActor
 final class GIStore: ObservableObject {
     static let shared = GIStore()
+    @Published private(set) var remote: GIReaderRemote = .gitee
+    var platformName: String { remote.name }
+    var savedGitLabServer: String { UserDefaults.standard.string(forKey: "toolisle.reader.gitlabServer") ?? "https://gitlab.com" }
+    var projectSourceTitle: String { remote.isGitLab ? "参与项目 / Star" : "Watch / Star" }
+    var availableStates: [String] { remote.isGitLab ? ["all", "unfinished", "open", "closed"] : GIListPresentation.states }
+    /// Cancels every pending request and clears private in-memory content before switching sites.
+    func useRemote(_ value: GIReaderRemote) {
+        guard remote != value else { return }
+        deactivate()
+        remote = value
+        if let url = value.gitLabURL { UserDefaults.standard.set(url.absoluteString, forKey: "toolisle.reader.gitlabServer") }
+        if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: "toolisle.reader.remote") }
+        connectionError = nil
+        activate()
+    }
     @Published private(set) var account: GIUser?
     @Published private(set) var demoMode = false
     @Published private(set) var isConnecting = false
@@ -75,7 +89,7 @@ final class GIStore: ObservableObject {
     @Published var notice: String?
     @Published var loadRemoteImages = false
     @Published var textScale = 1.0
-    private var api: GIAPI?
+    private var api: (any GIIssueService)?
     private var epoch = UUID()
     private var authAttempt = UUID()
     private var authTask: Task<Void, Never>?
@@ -90,6 +104,10 @@ final class GIStore: ObservableObject {
     private var attemptedRestore = false
 
     private init() {
+        if let data = UserDefaults.standard.data(forKey: "toolisle.reader.remote"),
+           let saved = try? JSONDecoder().decode(GIReaderRemote.self, from: data) {
+            if let url = saved.gitLabURL { remote = (try? GIReaderRemote.gitLab(url.absoluteString)) ?? .gitee }
+        }
         Defaults.publisher(.enableGiteeReader, options: []).receive(on: DispatchQueue.main)
             .sink { [weak self] change in
                 if !change.newValue { self?.deactivate() }
@@ -111,7 +129,7 @@ final class GIStore: ObservableObject {
     func toggleLabel(_ name: String) {
         if selectedLabels.contains(name) { selectedLabels.remove(name) } else { selectedLabels.insert(name) }
     }
-    private var collapseKey: String? { account.map { "toolisle.gitee.collapsedProjects.\($0.id)" } }
+    private var collapseKey: String? { account.map { "\(remote.storagePrefix).collapsedProjects.\($0.id)" } }
     func setProjectExpanded(_ id: String, expanded: Bool) {
         if expanded { collapsedProjects.remove(id) } else { collapsedProjects.insert(id) }
         if !demoMode, let key = collapseKey { UserDefaults.standard.set(collapsedProjects.sorted(), forKey: key) }
@@ -119,14 +137,14 @@ final class GIStore: ObservableObject {
     func expandMatchingProjects() {
         for group in issueGroups { setProjectExpanded(group.id, expanded: true) }
     }
-    private var selectionKey: String? { account.map { "toolisle.gitee.selection.\($0.id)" } }
+    private var selectionKey: String? { account.map { "\(remote.storagePrefix).selection.\($0.id)" } }
 
     /// Called only by the opt-in reader surfaces, never by application launch.
     func activate() {
         guard Defaults[.enableGiteeReader], !attemptedRestore, account == nil, !isConnecting else { return }
         attemptedRestore = true
-        do { if let token = try GICredential.read() { connect(token) } }
-        catch { connectionError = "无法读取钥匙串。请重新连接 Gitee。" }
+        do { if let token = try GICredential.read(remote: remote) { connect(token) } }
+        catch { connectionError = "无法读取钥匙串。请重新连接账户。" }
     }
     func connect(_ input: String) {
         let token = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,13 +155,15 @@ final class GIStore: ObservableObject {
         authTask?.cancel()
         let attempt = UUID(); authAttempt = attempt
         isConnecting = true; connectionError = nil
+        let requestedRemote = remote
         authTask = Task { [weak self] in
-            guard let self else { return }
-            let client = GIAPI(token: token)
+            guard let self, !Task.isCancelled, self.authAttempt == attempt, self.remote == requestedRemote else { return }
+            let client: any GIIssueService = requestedRemote.isGitLab
+                ? GLAPI(remote: requestedRemote, token: token) : GIAPI(token: token)
             do {
                 let user = try await client.user()
                 guard !Task.isCancelled, self.authAttempt == attempt, Defaults[.enableGiteeReader] else { client.cancel(); return }
-                try GICredential.save(token)
+                try GICredential.save(token, remote: requestedRemote)
                 self.clearSession()
                 self.api = client
                 self.account = user
@@ -163,7 +183,7 @@ final class GIStore: ObservableObject {
         }
     }
     func disconnect() {
-        do { try GICredential.delete() }
+        do { try GICredential.delete(remote: remote) }
         catch { connectionError = "无法移除钥匙串中的令牌，请重试。"; return }
         if let key = selectionKey { UserDefaults.standard.removeObject(forKey: key) }
         if let key = collapseKey { UserDefaults.standard.removeObject(forKey: key) }
@@ -246,7 +266,7 @@ final class GIStore: ObservableObject {
                     guard !Task.isCancelled, self.epoch == session else { return }
                     if reset { merged = merged.filter { $0.key.repository != repo } }
                     for issue in issues {
-                        let route = GIIssueRoute(repository: repo, number: issue.number)
+                        let route = GIIssueRoute(repository: repo, number: issue.number, remote: self.remote)
                         merged[route] = GIListItem(route: route, issue: issue)
                     }
                     self.nextIssuePages[repo] = issues.count == 50 ? page + 1 : nil
@@ -272,6 +292,7 @@ final class GIStore: ObservableObject {
         refreshIssues(reset: false, only: pending)
     }
     func open(_ route: GIIssueRoute, fragment: String? = nil, fromList: Bool = false) {
+        guard (route.remote ?? .gitee) == remote else { return }
         if fromList { selectedListID = route }
         history.push(route, fragment: fragment)
         notice = nil
@@ -285,10 +306,10 @@ final class GIStore: ObservableObject {
     }
     func handleLink(_ raw: String, visitID: UUID) {
         guard Defaults[.enableGiteeReader], let visit, visit.id == visitID else { return }
-        // The issue's server URL may reflect a moved repository; use it only on a verified Gitee origin.
+        // A moved repository may have a new canonical URL, but it must stay on the active site.
         let canonical = currentPage?.issue.html_url.flatMap(URL.init(string:))
-        let base = canonical.flatMap { GIIssueLinks.hosts.contains($0.host?.lowercased() ?? "") ? $0 : nil } ?? visit.route.url
-        switch GIIssueLinks.resolve(raw, relativeTo: base) {
+        let base = canonical.flatMap { remote.contains($0) ? $0 : nil } ?? visit.route.url
+        switch GIIssueLinks.resolve(raw, relativeTo: base, remote: remote) {
         case .issue(let route, let fragment): open(route, fragment: fragment)
         case .external(let url): NSWorkspace.shared.open(url)
         case .blocked: notice = "此链接的协议、地址或参数不安全，未打开。"
@@ -337,7 +358,7 @@ final class GIStore: ObservableObject {
                 self.touchCache(route)
                 self.notice = commentWarning
                 if let anchor = GIIssueLinks.commentID(visit.fragment), !comments.contains(where: { $0.id == anchor }) {
-                    self.notice = "未找到指定评论，可能已删除或超出已加载范围。原链接已保留，可在 Gitee 打开。"
+                    self.notice = "未找到指定评论，可能已删除或超出已加载范围。原链接已保留，可在平台网页打开。"
                 }
             } catch {
                 guard !Task.isCancelled, self.epoch == session, self.visit?.id == visitID else { return }
@@ -350,7 +371,7 @@ final class GIStore: ObservableObject {
     }
     func moreComments() {
         guard !loadingDetail, let visit, var page = currentPage, page.hasMoreComments, let client = api else { return }
-        guard page.comments.count < 1000 else { notice = "已加载 1000 条评论。更多内容请在 Gitee 打开。"; return }
+        guard page.comments.count < 1000 else { notice = "已加载 1000 条评论。更多内容请在平台网页打开。"; return }
         detailTask?.cancel(); loadingDetail = true
         let session = epoch, visitID = visit.id
         detailTask = Task { [weak self] in
@@ -376,7 +397,8 @@ final class GIStore: ObservableObject {
 
     /// Explicit synthetic preview: no Gitee requests, no writes to the stored credential or selection.
     func startDemo() {
-        deactivate(); Defaults[.enableGiteeReader] = true
+        deactivate(); remote = .gitee
+        Defaults[.enableGiteeReader] = true
         demoMode = true; attemptedRestore = true
         account = GIUser(id: -1, login: "demo", name: "离线演示 · 非真实项目")
         let repos = [GIRepository(id: -1, full_name: "toolisle-demo/workbench", name: "Workbench", description: "演示项目", html_url: nil),

@@ -24,7 +24,7 @@ struct GIWebReader: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
-        webView.loadHTMLString(Self.shell, baseURL: URL(string: "https://toolisle.invalid/reader"))
+        webView.loadHTMLString(Self.shell(for: store.remote), baseURL: URL(string: "https://toolisle.invalid/reader"))
         return webView
     }
     func updateNSView(_ webView: WKWebView, context: Context) {
@@ -33,10 +33,10 @@ struct GIWebReader: NSViewRepresentable {
         context.coordinator.signature = signature
         var base = visit.route.url
         if let raw = page.issue.html_url, let canonical = URL(string: raw),
-           canonical.scheme == "https", GIIssueLinks.hosts.contains(canonical.host?.lowercased() ?? ""),
+           store.remote.contains(canonical),
            canonical.user == nil, canonical.password == nil { base = canonical }
         let payload: [String: Any] = [
-            "visit": visit.id.uuidString, "base": base.absoluteString,
+            "visit": visit.id.uuidString, "base": base.absoluteString, "imageOrigins": store.remote.imageOrigins,
             "title": page.issue.title, "state": page.issue.stateTitle,
             "author": page.issue.user?.displayName ?? "", "updated": page.issue.updated_at ?? "",
             "body": page.issue.body ?? "", "fragment": visit.anchorHandled ? "" : (visit.fragment ?? ""),
@@ -66,7 +66,7 @@ struct GIWebReader: NSViewRepresentable {
             self.pending = nil
             // Base64 is emitted by JSONSerialization, not untrusted executable interpolation.
             view.evaluateJavaScript("window.GIReader.renderBase64('\(pending)')") { [weak self] _, error in
-                if error != nil { self?.store.notice = "Markdown 渲染失败，可在 Gitee 中打开原文。" }
+                if error != nil { self?.store.notice = "Markdown 渲染失败，可在平台网页中打开原文。" }
             }
         }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { ready = true; render(webView) }
@@ -76,7 +76,7 @@ struct GIWebReader: NSViewRepresentable {
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             ready = false; signature = ""
             store.notice = "阅读进程已重启，请刷新当前 Issue。"
-            webView.loadHTMLString(GIWebReader.shell, baseURL: URL(string: "https://toolisle.invalid/reader"))
+            webView.loadHTMLString(GIWebReader.shell(for: store.remote), baseURL: URL(string: "https://toolisle.invalid/reader"))
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame, message.webView?.url?.host == "toolisle.invalid",
@@ -90,7 +90,7 @@ struct GIWebReader: NSViewRepresentable {
             case "ready":
                 store.snapshot(id: id, y: (data["y"] as? Double) ?? 0, anchorHandled: true)
                 if data["anchorFound"] as? Bool == false {
-                    store.notice = "未能定位到链接指定的段落或评论。Issue 已打开，可使用“在 Gitee 中打开”查看原定位。"
+                    store.notice = "未能定位到链接指定的段落或评论。Issue 已打开，可使用“在平台网页中打开”查看原定位。"
                 }
                 if ProcessInfo.processInfo.arguments.contains("--gitee-reader-smoke"), store.demoMode, let webView = message.webView {
                     GISmokeCheck.shared.didRender(webView, store: store)
@@ -121,6 +121,10 @@ struct GIWebReader: NSViewRepresentable {
         }
     }
 
+    static func shell(for remote: GIReaderRemote) -> String {
+        let origins = remote.imageOrigins.joined(separator: " ").replacingOccurrences(of: "\"", with: "&quot;")
+        return shell.replacingOccurrences(of: "https://gitee.com https://foruda.gitee.com https://images.gitee.com", with: origins)
+    }
     static let shell = #"""
     <!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -172,7 +176,7 @@ struct GIWebReader: NSViewRepresentable {
       function markdown(source,base,images) {
         const box=node('div');
         if(!window.GIText) {box.textContent=source;return box}
-        if(source.length>1000000){box.className='error';box.textContent='正文过长，请在 Gitee 中打开完整内容。';return box}
+        if(source.length>1000000){box.className='error';box.textContent='正文过长，请在平台网页中打开完整内容。';return box}
         // Template contents are inert: no image request may start before the opt-in check.
         const template=document.createElement('template');
         template.innerHTML=GIText.render(source);
@@ -189,12 +193,12 @@ struct GIWebReader: NSViewRepresentable {
           const raw=e.getAttribute('src')||'';const alt=e.getAttribute('alt')||'图片';
           const data=/^data:image\/(png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(raw)&&raw.length<2000000;
           const u=safeURL(raw,base);
-          const trusted=u&&u.protocol==='https:'&&['gitee.com','foruda.gitee.com','images.gitee.com'].includes(u.hostname)&&(!u.port||u.port==='443');
+          const trusted=u&&['https:','http:'].includes(u.protocol)&&(current.imageOrigins||[]).includes(u.origin);
           if(images&&(trusted||data)) {
             e.src=data?raw:u.href;e.referrerPolicy='no-referrer';
-            e.addEventListener('error',()=>{e.replaceWith(node('p','图片未能加载或需要网页登录。请在 Gitee 打开。','footnote'))},{once:true});
+            e.addEventListener('error',()=>{e.replaceWith(node('p','图片未能加载或需要网页登录。请在平台网页打开。','footnote'))},{once:true});
           } else {
-            const button=node('button',trusted||data?'点击加载 Gitee 图片 · '+alt:'在浏览器查看外部图片 · '+alt,'image-placeholder');
+            const button=node('button',trusted||data?'点击加载图片 · '+alt:'在浏览器查看外部图片 · '+alt,'image-placeholder');
             if(trusted||data)button.addEventListener('click',()=>{snapshot();post('images')});
             else if(u)button.addEventListener('click',()=>{snapshot();post('link',{href:u.href})});
             else {button.disabled=true;button.textContent='无法显示此图片 · '+alt}
@@ -218,7 +222,7 @@ struct GIWebReader: NSViewRepresentable {
         const root=document.getElementById('content');root.replaceChildren();
         root.append(node('h1',data.title));
         const meta=node('div',undefined,'meta');meta.append(node('span',data.state,'state'),node('span',data.author),node('span',data.updated.replace('T',' ').slice(0,16)));root.append(meta);
-        if(!window.GIText)root.append(node('p','Markdown 组件未能加载，以下以纯文本显示；可在 Gitee 打开原文。','error'));
+        if(!window.GIText)root.append(node('p','Markdown 组件未能加载，以下以纯文本显示；可在平台网页打开原文。','error'));
         root.append(markdown(data.body,data.base,data.images));
         root.append(node('h2','评论 · '+data.comments.length,'comments-title'));
         if(!data.comments.length)root.append(node('p','当前未加载到评论。','footnote'));
