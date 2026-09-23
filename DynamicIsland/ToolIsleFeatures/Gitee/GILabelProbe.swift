@@ -14,7 +14,7 @@ import WebKit
     }
     static func record(_ tags: [GITagSpec], width: CGFloat, rows: [[Int]], maximum: Int) {
         guard started, ProcessInfo.processInfo.arguments.contains("--gitee-label-probe") else { return }
-        let kind = tags.first?.id == "unfinished" ? "status" : (tags.first?.id == "state" ? "issue" : "labels")
+        let kind = tags.map(\.id).starts(with: GIListPresentation.states) ? "status" : (tags.first?.id == "state" ? "issue" : "labels")
         trays.append(["kind": kind, "width": width, "row_count": rows.count, "max_rows": maximum,
                       "visible": rows.flatMap { $0 }.filter { $0 >= 0 }.map { tags[$0].id },
                       "has_overflow": rows.flatMap { $0 }.contains(-1)])
@@ -106,8 +106,8 @@ import WebKit
                         }
                         check(!status.isEmpty, "measured status geometry at \(sidebar)pt in \(dark ? "dark" : "light")")
                         check(!status.isEmpty && status.allSatisfy {
-                            $0["row_count"] as? Int == 1 && Array(($0["visible"] as? [String] ?? []).prefix(3)) == Array(GIListPresentation.states.prefix(3))
-                        }, "three priority states stay in one row at \(sidebar)pt in \(dark ? "dark" : "light")")
+                            $0["row_count"] as? Int == 1 && Array(($0["visible"] as? [String] ?? []).prefix(4)) == Array(GIListPresentation.states.prefix(4))
+                        }, "All first and three common states stay in one row at \(sidebar)pt in \(dark ? "dark" : "light")")
                         capture(filterWindow, "labels-filter-\(sidebar)-\(dark ? "dark" : "light")")
                         // Resize the very same hosting instance rather than only recreating it.
                         if sidebar == 260 {
@@ -149,11 +149,11 @@ import WebKit
                 check(store.visit?.id == visit && store.selectedListID == selection, "rendered group collapse preserves current reading")
                 store.expandMatchingProjects()
 
-                store.stateFilter = "all"; await pause(); capture(window, "labels-state-from-overflow")
+                store.stateFilter = "rejected"; await pause(); capture(window, "labels-state-from-overflow")
             } else { failed.append("reader exists") }
             let stateTrays = trays.filter { $0["kind"] as? String == "status" && ($0["width"] as? CGFloat ?? 0) >= 236 }
             check(!stateTrays.isEmpty, "actual native status geometry captured")
-            check(!stateTrays.isEmpty && stateTrays.allSatisfy { $0["row_count"] as? Int == 1 && Array(($0["visible"] as? [String] ?? []).prefix(3)) == Array(GIListPresentation.states.prefix(3)) }, "actual one-row status keeps three priority states")
+            check(!stateTrays.isEmpty && stateTrays.allSatisfy { $0["row_count"] as? Int == 1 && Array(($0["visible"] as? [String] ?? []).prefix(4)) == Array(GIListPresentation.states.prefix(4)) }, "actual one-row status keeps All first and three common states")
             let labelTrays = trays.filter { $0["kind"] as? String == "labels" }
             check(!labelTrays.isEmpty && labelTrays.allSatisfy { ($0["row_count"] as? Int ?? 3) <= 2 }, "native label trays never exceed two rows")
             check(trays.contains { $0["kind"] as? String == "labels" && $0["has_overflow"] as? Bool == true }, "large label range exposes overflow")
