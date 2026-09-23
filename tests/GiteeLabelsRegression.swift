@@ -5,6 +5,17 @@ import Foundation
         count += 1; if !(try! result()) { fatalError(name) }
     }
     static func main() throws {
+        for compact in [false, true] {
+            let padding: Double = compact ? 12 : 16
+            for text in [0.0, 11.1, 33, 75.8] {
+                expect(GIChipFaceMetrics.width(textWidth: text, available: 236, selectable: true, compact: compact, state: false) == ceil(text) + padding,
+                       "filter geometry contains no checkmark slot")
+            }
+        }
+        expect(GIChipFaceMetrics.width(textWidth: 300, available: 236, selectable: true, compact: false, state: false) == 158, "long chip remains bounded")
+        expect(GIChipFaceMetrics.width(textWidth: 40, available: 30, selectable: true, compact: true, state: false) == 30, "narrow chip respects available width")
+        expect(GIChipFaceMetrics.width(textWidth: 33, available: 236, selectable: false, compact: false, state: true) == 60, "noninteractive Issue status geometry is unchanged")
+        expect(GIChipFaceMetrics.width(textWidth: 33, available: 236, selectable: false, compact: false, state: false) == 49, "noninteractive Issue label geometry is unchanged")
         let decoder = JSONDecoder()
         func decode(_ value: String) throws -> GIIssue {
             try decoder.decode(GIIssue.self, from: Data(("{\"id\":1,\"number\":\"IAb12\",\"title\":\"test\",\"state\":\"open\"" + value + "}").utf8))

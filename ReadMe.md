@@ -1,4 +1,4 @@
-> **ToolIsle：Atoll 原版基线验证版。** 仅替换提供的 Logo 并增加文档及打包验证；保留原版功能、入口和配置。基线与使用注意见 [TOOLISLE.md](TOOLISLE.md)。
+> **ToolIsle：保留 Atoll 主体的 Gitee Issue 阅读版。** `dev` 使用原 `DynamicIsland.xcodeproj`，包含独立 Gitee 设置、关联跳转、项目分组和紧凑筛选。当前说明见 [TOOLISLE-GITEE-CHECKLESS.md](TOOLISLE-GITEE-CHECKLESS.md)。下方保留上游介绍与来源链接；上游下载不是 ToolIsle 构建。
 
 <p align="center">
   <img src=".github/assets/atoll-logo.png" alt="Atoll logo" width="120">

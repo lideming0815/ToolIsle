@@ -22,7 +22,7 @@ enum GITagPalette {
 }
 
 /// Only visible chips are constructed: hidden labels have no accidental hit targets or AX elements.
-/// The size calculation reserves the same font/padding/checkmark used by GITagFace.
+/// Geometry matches GITagFace padding. Selection never reserves an icon slot.
 struct GIChipTray<Overflow: View>: View {
     let tags: [GITagSpec]
     var maxRows = 1
@@ -37,7 +37,8 @@ struct GIChipTray<Overflow: View>: View {
     static var height: CGFloat { 24 }
     private func chipWidth(_ tag: GITagSpec, available: CGFloat) -> Double {
         let text = (tag.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).width
-        return min(Double(available), min(158, ceil(text) + (selectable ? (menuOverflow ? 25 : 29) : (tag.state ? 27 : 16))))
+        return GIChipFaceMetrics.width(textWidth: Double(text), available: Double(available),
+                                       selectable: selectable, compact: menuOverflow, state: tag.state)
     }
     private func overflowWidth(available: CGFloat) -> Double {
         if menuOverflow { return 28 }
@@ -75,6 +76,7 @@ struct GIChipTray<Overflow: View>: View {
                                     GITagFace(tag: tag, selectable: true, compact: menuOverflow).frame(width: widths[index], height: Self.height)
                                 }.buttonStyle(.plain).help(tag.title)
                                     .accessibilityLabel(tag.title).accessibilityValue(tag.selected ? "已选中" : "未选中")
+                                    .accessibilityAddTraits(tag.selected ? .isSelected : [])
                                     .accessibilityIdentifier("gitee-filter-\(tag.id)")
                             } else {
                                 GITagFace(tag: tag, selectable: false).frame(width: widths[index], height: Self.height)
@@ -124,10 +126,7 @@ struct GITagFace: View {
         let dark = appearance == .dark
         let tint = GITagPalette.color(tag.color, dark: dark)
         HStack(spacing: 3) {
-            if selectable {
-                Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold))
-                    .frame(width: 10).opacity(tag.selected ? 1 : 0)
-            } else if tag.state {
+            if !selectable && tag.state {
                 Circle().fill(tint).frame(width: 5, height: 5)
             }
             Text(tag.title).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.tail)
@@ -158,8 +157,9 @@ struct GIStatusFilters: View {
                        maxRows: 1, menuOverflow: true, select: { store.stateFilter = $0 }) {
                 ForEach(states, id: \.self) { state in
                     Button { store.stateFilter = state } label: {
-                        HStack { Text(GIListPresentation.stateTitle(state)); if state == store.stateFilter { Image(systemName: "checkmark") } }
+                        Text(GIListPresentation.stateTitle(state) + (state == store.stateFilter ? "（当前）" : ""))
                     }
+                    .accessibilityValue(state == store.stateFilter ? "已选中" : "未选中")
                 }
             }
         }.accessibilityIdentifier("gitee-status-one-line")
@@ -199,6 +199,7 @@ struct GILabelPicker: View {
     @State private var query = ""
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
+    @Environment(\.colorScheme) private var appearance
     private func matches(_ name: String) -> Bool { query.isEmpty || name.localizedCaseInsensitiveContains(query) }
     var body: some View {
         let facets = store.labelFacets
@@ -238,18 +239,26 @@ struct GILabelPicker: View {
         }
     }
     private func choice(_ name: String, detail: String, color: String?) -> some View {
-        Button { store.toggleLabel(name) } label: {
+        let selected = store.selectedLabels.contains(name)
+        return Button { store.toggleLabel(name) } label: {
             HStack(spacing: 8) {
-                Image(systemName: store.selectedLabels.contains(name) ? "checkmark.square.fill" : "square")
-                    .foregroundStyle(store.selectedLabels.contains(name) ? Color.accentColor : .secondary)
-                Circle().fill(GITagPalette.color(color, dark: false)).frame(width: 7, height: 7)
+                Circle().fill(GITagPalette.color(color, dark: appearance == .dark)).frame(width: 7, height: 7)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name).font(.callout).lineLimit(2)
                     Text(detail).font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-            }.padding(.vertical, 5).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-        }.buttonStyle(.plain).help(name).accessibilityValue(store.selectedLabels.contains(name) ? "已选中" : "未选中")
+            }.padding(.vertical, 5).padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.accentColor.opacity(selected ? (appearance == .dark ? 0.22 : 0.12) : 0),
+                            in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(
+                    Color.accentColor.opacity(selected ? 0.65 : 0), lineWidth: 1))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).help(name)
+            .accessibilityLabel(name).accessibilityValue(selected ? "已选中" : "未选中")
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityIdentifier("gitee-label-choice-\(name)")
     }
 }
 

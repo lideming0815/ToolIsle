@@ -102,3 +102,14 @@ enum GIChipPacking {
         return Plan(rows: rows(for: visible, withOverflow: true) ?? [[-1]], hidden: widths.count - visible)
     }
 }
+
+
+/// Text measurement and horizontal padding only; selected and unselected filters
+/// use identical geometry, with no invisible checkbox or checkmark reservation.
+enum GIChipFaceMetrics {
+    static func width(textWidth: Double, available: Double, selectable: Bool,
+                      compact: Bool, state: Bool) -> Double {
+        let extra: Double = selectable ? (compact ? 12 : 16) : (state ? 27 : 16)
+        return min(max(0, available), min(158, ceil(max(0, textWidth)) + extra))
+    }
+}

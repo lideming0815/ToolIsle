@@ -1,3 +1,5 @@
+> 历史基线说明，仅作回滚对照。当前版本见 [TOOLISLE-GITEE-CHECKLESS.md](TOOLISLE-GITEE-CHECKLESS.md)，不再适用下文“仅替换 Logo”的范围。
+
 # ToolIsle — Atoll 原版基线验证版
 
 本分支撤销独立工具箱的运行入口，直接以改造前 Atoll 提交 `83d15438efc5254635c5b425406d6603c80b8ece` 为基线。保留 `DynamicIsland.xcodeproj` / `DynamicIsland` scheme、全部原版功能、源码、配置、默认值和锁定依赖。

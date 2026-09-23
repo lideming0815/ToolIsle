@@ -57,6 +57,13 @@ import WebKit
                 check(await waitForReading(window), "initial real WebKit body is visible")
             }
             store.installLabelFixtures(); store.clearFilters()
+            for compact in [true, false] {
+                let text = ("进行中" as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).width
+                let actual = GIChipFaceMetrics.width(textWidth: Double(text), available: 236,
+                    selectable: true, compact: compact, state: false)
+                let old = ceil(Double(text)) + (compact ? 25 : 29)
+                check(abs(old - actual - 13) < 0.01, "checkless filters reclaim 13pt in \(compact ? "status" : "label") chips")
+            }
             let visit = store.visit?.id, selection = store.selectedListID
             let labels = store.labelFacets.map(\.name), allCount = store.filteredItems.count
             check(labels.count > 100, "over 100 actual model labels")
@@ -79,6 +86,7 @@ import WebKit
                 for dark in [false, true] {
                     NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
                     store.stateFilter = "unfinished"
+                    store.selectedLabels = ["bug"]
                     // Restore the normal reading window after all filters / groups have changed.
                     GIReaderWindowController.shared.show()
                     await pause()
@@ -117,6 +125,11 @@ import WebKit
                 picker.isReleasedWhenClosed = false
                 picker.contentView = NSHostingView(rootView: GILabelPicker())
                 picker.makeKeyAndOrderFront(nil); await pause(); capture(picker, "labels-picker")
+                check(store.selectedLabels == ["bug"], "selected label remains explicit without checkbox")
+                store.toggleLabel("bug"); await pause()
+                check(store.selectedLabels.isEmpty, "selected label can be deselected without checkbox")
+                capture(picker, "labels-picker-cleared")
+                store.toggleLabel("bug"); await pause()
                 if let root = picker.contentView,
                    let input = descendants(root).compactMap({ $0 as? NSTextField }).first(where: { $0.placeholderString == "搜索当前范围的标签" }) {
                     input.selectText(nil)
