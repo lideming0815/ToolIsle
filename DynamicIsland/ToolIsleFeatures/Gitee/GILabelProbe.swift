@@ -34,10 +34,10 @@ import WebKit
                 p.arguments = ["-x", "-o", "-l", String(window.windowNumber), output.deletingLastPathComponent().appendingPathComponent(name + ".png").path]
                 try? p.run(); p.waitUntilExit()
             }
-            func descendants(_ view: NSView) -> [NSView] {
+            @MainActor func descendants(_ view: NSView) -> [NSView] {
                 [view] + view.subviews.flatMap { descendants($0) }
             }
-            func waitForReading(_ window: NSWindow) async -> Bool {
+            @MainActor func waitForReading(_ window: NSWindow) async -> Bool {
                 for _ in 0..<40 {
                     if let root = window.contentView,
                        let web = descendants(root).compactMap({ $0 as? WKWebView }).first,
