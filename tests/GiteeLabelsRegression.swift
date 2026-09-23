@@ -42,10 +42,10 @@ import Foundation
         expect(groups.map(\.id) == ["repo:2","repo:1"], "persistent ID not display name")
         expect(GIListPresentation.groups(pending,repositories:[r1,r2]).count == 2, "group after filtering")
         expect(Array(GIListPresentation.states.prefix(3)) == ["unfinished","progressing","closed"], "requested state priority")
-        for width in [212.0,236,260,296,356,600] {
-            let plan = GIChipPacking.pack(widths:[62,62,62,48,48,62],available:width,maxRows:1,overflow:28)
+        for width in [212.0,217,220,236,260,296,356,600] {
+            let plan = GIChipPacking.pack(widths:[58,58,58,44,44,58],available:width,maxRows:1,overflow:28)
             expect(plan.rows.count == 1,"single-line state")
-            if width >= 236 { expect(plan.rows[0].prefix(3) == [0,1,2],"three priority states fit") }
+            if width >= 217 { expect(plan.rows[0].prefix(3) == [0,1,2],"three priority states fit") }
         }
         for width in [1.0,100,212,236,296,356,600] {
             for n in [0,1,2,8,20,100,500] {

@@ -21,11 +21,6 @@ enum GITagPalette {
     }
 }
 
-private struct GITrayWidth: PreferenceKey {
-    static let defaultValue: CGFloat = 220
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 /// Only visible chips are constructed: hidden labels have no accidental hit targets or AX elements.
 /// The size calculation reserves the same font/padding/checkmark used by GITagFace.
 struct GIChipTray<Overflow: View>: View {
@@ -37,19 +32,21 @@ struct GIChipTray<Overflow: View>: View {
     var select: (String) -> Void = { _ in }
     @ViewBuilder var overflow: () -> Overflow
     @State private var width: CGFloat = 220
+    @State private var measured = false
     @State private var showMore = false
     static var height: CGFloat { 24 }
-    private func chipWidth(_ tag: GITagSpec) -> Double {
+    private func chipWidth(_ tag: GITagSpec, available: CGFloat) -> Double {
         let text = (tag.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).width
-        return min(Double(width), min(158, ceil(text) + (selectable ? 29 : (tag.state ? 27 : 16))))
+        return min(Double(available), min(158, ceil(text) + (selectable ? (menuOverflow ? 25 : 29) : (tag.state ? 27 : 16))))
     }
-    private var overflowWidth: Double {
+    private func overflowWidth(available: CGFloat) -> Double {
         if menuOverflow { return 28 }
         let title = compactOverflow ? "+\(tags.count)" : "… +\(tags.count)"
-        return min(Double(width), Double((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).width) + 16)
+        return min(Double(available), Double((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11, weight: .medium)]).width) + 16)
     }
     var body: some View {
-        let widths = tags.map(chipWidth)
+        let widths = tags.map { chipWidth($0, available: width) }
+        let overflowWidth = overflowWidth(available: width)
         let plan = GIChipPacking.pack(widths: widths, available: Double(width), maxRows: maxRows, overflow: overflowWidth)
         VStack(alignment: .leading, spacing: 5) {
             ForEach(Array(plan.rows.enumerated()), id: \.offset) { _, row in
@@ -75,7 +72,7 @@ struct GIChipTray<Overflow: View>: View {
                             let tag = tags[index]
                             if selectable {
                                 Button { select(tag.id) } label: {
-                                    GITagFace(tag: tag, selectable: true).frame(width: widths[index], height: Self.height)
+                                    GITagFace(tag: tag, selectable: true, compact: menuOverflow).frame(width: widths[index], height: Self.height)
                                 }.buttonStyle(.plain).help(tag.title)
                                     .accessibilityLabel(tag.title).accessibilityValue(tag.selected ? "已选中" : "未选中")
                                     .accessibilityIdentifier("gitee-filter-\(tag.id)")
@@ -89,19 +86,37 @@ struct GIChipTray<Overflow: View>: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(GeometryReader { proxy in Color.clear.preference(key: GITrayWidth.self, value: proxy.size.width) })
-        .onPreferenceChange(GITrayWidth.self) { value in
-            if value.isFinite && value > 0 && abs(value - width) > 0.5 { width = value }
+        // Measure this tray locally. A shared PreferenceKey was reduced across sibling
+        // trays and left every instance at its 220pt fallback, hiding the third status.
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { acceptSize(proxy.size) }
+                .onChange(of: proxy.size) { _, size in acceptSize(size) }
+        })
+        .onChange(of: tags.map { $0.id + "\u{1f}" + $0.title }) { _, _ in
+            if measured { recordLayout(width: width) }
         }
-        .onAppear { GILabelProbe.record(tags, width: width, rows: plan.rows, maximum: maxRows) }
-        .onChange(of: width) { _, _ in GILabelProbe.record(tags, width: width, rows: plan.rows, maximum: maxRows) }
-        .onChange(of: tags.map(\.id)) { _, _ in GILabelProbe.record(tags, width: width, rows: plan.rows, maximum: maxRows) }
+    }
+    private func acceptSize(_ size: CGSize) {
+        guard size.width.isFinite, size.width > 0 else { return }
+        if abs(size.width - width) > 0.5 { width = size.width }
+        measured = true
+        recordLayout(width: size.width)
+    }
+    private func recordLayout(width actualWidth: CGFloat) {
+        // The probe accepts only geometry measurements, never an initial fallback.
+        guard ProcessInfo.processInfo.arguments.contains("--gitee-label-probe") else { return }
+        let widths = tags.map { chipWidth($0, available: actualWidth) }
+        let plan = GIChipPacking.pack(widths: widths, available: Double(actualWidth), maxRows: maxRows,
+                                      overflow: overflowWidth(available: actualWidth))
+        GILabelProbe.record(tags, width: actualWidth, rows: plan.rows, maximum: maxRows)
     }
 }
 
 struct GITagFace: View {
     let tag: GITagSpec
     var selectable = false
+    var compact = false
     @Environment(\.colorScheme) private var appearance
     var body: some View {
         let dark = appearance == .dark
@@ -115,7 +130,7 @@ struct GITagFace: View {
             }
             Text(tag.title).font(.system(size: 11, weight: .medium)).lineLimit(1).truncationMode(.tail)
         }
-        .padding(.horizontal, 8).frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, compact ? 6 : 8).frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(GITagPalette.color(tag.color, dark: dark, text: true))
         .background(tint.opacity(tag.selected ? (dark ? 0.26 : 0.18) : (dark ? 0.16 : 0.09)), in: Capsule())
         .overlay(Capsule().strokeBorder(tint.opacity(tag.selected ? 0.80 : 0.20), lineWidth: tag.selected ? 1.2 : 0.5))
@@ -134,6 +149,7 @@ struct GIStatusFilters: View {
                 Spacer()
                 if !GIListPresentation.states.prefix(3).contains(store.stateFilter) {
                     Text("当前：\(GIListPresentation.stateTitle(store.stateFilter))").font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).help(GIListPresentation.stateTitle(store.stateFilter))
                 }
             }
             GIChipTray(tags: states.map { GITagSpec(id: $0, title: GIListPresentation.stateTitle($0), color: GITagPalette.state($0), selected: store.stateFilter == $0) },
@@ -179,13 +195,19 @@ struct GILabelFilters: View {
 struct GILabelPicker: View {
     @ObservedObject private var store = GIStore.shared
     @State private var query = ""
+    @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
     private func matches(_ name: String) -> Bool { query.isEmpty || name.localizedCaseInsensitiveContains(query) }
     var body: some View {
         let facets = store.labelFacets
         let missing = store.selectedLabels.subtracting(Set(facets.map(\.name))).sorted()
         VStack(alignment: .leading, spacing: 10) {
-            Text("筛选标签").font(.headline)
+            HStack {
+                Text("筛选标签").font(.headline)
+                Spacer()
+                Button { dismiss() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain).help("关闭标签筛选").accessibilityLabel("关闭标签筛选")
+            }
             TextField("搜索当前范围的标签", text: $query).textFieldStyle(.roundedBorder).focused($focused)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
@@ -208,6 +230,10 @@ struct GILabelPicker: View {
             }
         }.padding(14).frame(width: 310).onAppear { focused = true }
         .accessibilityIdentifier("gitee-label-picker")
+        .onExitCommand { dismiss() }
+        .onChange(of: query) { _, value in
+            GILabelProbe.recordSearch(value, names: facets.filter { matches($0.name) }.map(\.name))
+        }
     }
     private func choice(_ name: String, detail: String, color: String?) -> some View {
         Button { store.toggleLabel(name) } label: {
