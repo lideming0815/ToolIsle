@@ -12,35 +12,8 @@ concurrency:
   group: toolisle-integration-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  finalize:
-    if: github.repository == 'lideming0815/ToolIsle' && (github.ref == 'refs/heads/fix/gitee-checkless-selection' || github.ref == 'refs/heads/dev')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      source: ${{ steps.source.outputs.sha }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.sha }}
-      - id: source
-        name: Finalize locally verified source edits as a normal commit
-        run: |
-          set -euo pipefail
-          if [ -f scripts/finalize_checkless.py ]; then
-            test "$GITHUB_REF" = refs/heads/fix/gitee-checkless-selection
-            python3 scripts/finalize_checkless.py
-            git rm scripts/finalize_checkless.py
-            git add DynamicIsland DynamicIsland.xcodeproj tests .github/workflows ReadMe.md CHANGELOG.md TOOLISLE.md TOOLISLE-GITEE-CHECKLESS.md
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'fix(gitee): remove selection icon slots and prepare verified native dev integration'
-            git push origin HEAD:refs/heads/fix/gitee-checkless-selection
-          fi
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
   macos:
-    needs: finalize
+    if: github.repository == 'lideming0815/ToolIsle' && (github.ref == 'refs/heads/fix/gitee-checkless-selection' || github.ref == 'refs/heads/dev')
     runs-on: macos-26
     timeout-minutes: 40
     steps:
@@ -48,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-          ref: ${{ needs.finalize.outputs.source }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -56,18 +29,18 @@ jobs:
       - name: Audit scope, restored application and compact geometry
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${{ needs.finalize.outputs.source }}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git diff --exit-code
           mkdir -p "$RUNNER_TEMP/gitee-fix-output"
           python3 - <<'PY' | tee "$RUNNER_TEMP/gitee-fix-output/checkless-scope-audit.json"
           import subprocess,hashlib,json
           from pathlib import Path
           base='9b93364a357611069a8e14bb7a91c39a064b1d75'
-          allowed={'DynamicIsland.xcodeproj/project.pbxproj','DynamicIsland/ToolIsleFeatures/Gitee/GITagControls.swift','DynamicIsland/ToolIsleFeatures/Gitee/GIListPresentation.swift','DynamicIsland/ToolIsleFeatures/Gitee/GILabelProbe.swift','tests/GiteeLabelsRegression.swift','ReadMe.md','CHANGELOG.md','TOOLISLE.md','.github/workflows/ci.yml','.github/workflows/mirror-release.yml','.github/workflows/nightly-merge.yml','.github/workflows/release.yml','.github/workflows/triage-slash-commands.yml'}
+          allowed={'DynamicIsland.xcodeproj/project.pbxproj','DynamicIsland/ToolIsleFeatures/Gitee/GITagControls.swift','DynamicIsland/ToolIsleFeatures/Gitee/GIListPresentation.swift','DynamicIsland/ToolIsleFeatures/Gitee/GILabelProbe.swift','tests/GiteeLabelsRegression.swift','tests/test_privacy_configuration.py','ReadMe.md','CHANGELOG.md','TOOLISLE.md','.github/workflows/ci.yml','.github/workflows/mirror-release.yml','.github/workflows/nightly-merge.yml','.github/workflows/release.yml','.github/workflows/triage-slash-commands.yml'}
           subprocess.run(['git','merge-base','--is-ancestor','9c2d9dcfe547a0fd0ae25d4f513a3ac9687fd0be','HEAD'],check=True)
           assert not Path('Package.swift').exists()
-          assert not Path('scripts/finalize_checkless.py').exists()
-          assert not Path('scripts/gitee-checkless-finish.b64').exists()
+          for temporary in ['scripts/finalize_checkless.py','scripts/.checkless_source.py','scripts/gitee-checkless-finish.b64']:
+              assert not Path(temporary).exists(),temporary
           count=0
           for path in subprocess.check_output(['git','ls-tree','-r','--name-only',base],text=True).splitlines():
               if path in allowed:continue
@@ -77,7 +50,10 @@ jobs:
                   assert len(actual)==int(fields['size']) and hashlib.sha256(actual).hexdigest()==fields['oid'].split(':')[1],path
               else:assert actual==expected,path
               count+=1
-          print(json.dumps({'base':base,'source':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'unchanged_baseline_files':count,'allowed_existing_files':sorted(allowed),'native_application_preserved':True,'checkmark_icon_and_reservation_removed':True},indent=2))
+          for name in ['ci.yml','release.yml','mirror-release.yml','nightly-merge.yml','triage-slash-commands.yml']:
+              expected=subprocess.check_output(['git','show',base+':.github/workflows/'+name])
+              assert (Path('docs/upstream-workflows')/name).read_bytes()==expected,name
+          print(json.dumps({'base':base,'source':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'unchanged_baseline_files':count,'allowed_existing_files':sorted(allowed),'native_application_preserved':True,'upstream_workflows_archived_verbatim':True,'checkmark_icon_and_reservation_removed':True},indent=2))
           PY
           python3 -m unittest tests.test_gitee_checkless tests.test_gitee_reader_lifecycle 2>&1 | tee "$RUNNER_TEMP/gitee-fix-output/checkless-structural-tests.txt"
           swiftc DynamicIsland/ToolIsleFeatures/Gitee/GICore.swift DynamicIsland/ToolIsleFeatures/Gitee/GIListPresentation.swift tests/GiteeLabelsRegression.swift -o "$RUNNER_TEMP/LabelsTests"
