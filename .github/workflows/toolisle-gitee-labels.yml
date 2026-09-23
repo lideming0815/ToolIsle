@@ -11,7 +11,7 @@ defaults:
     shell: bash
 concurrency:
   group: toolisle-gitee-labels-preview
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   apply-scoped-patch:
     runs-on: ubuntu-latest
@@ -33,16 +33,16 @@ jobs:
             python3 - <<'PY'
           import base64,gzip,hashlib,subprocess
           from pathlib import Path
-          encoded=Path('scripts/gitee-labels-finish.b64').read_text().replace('Fe7gvUVZZq','Fe7gvUVZq')
+          encoded=Path('scripts/gitee-labels-finish.b64').read_text()
           patch=gzip.decompress(base64.b64decode(encoded,validate=True))
-          assert hashlib.sha256(patch).hexdigest()=='38e5da84605c76f64a30c067a90dca4e618deee6d8251859ae6f4a2c30c69600'
+          assert hashlib.sha256(patch).hexdigest()=='18ec26fc80ba0eb1245d08fd7d3abe257d002829562090852a3b79bbc54d84cb'
           subprocess.run(['git','apply','--check','-'],input=patch,check=True)
           subprocess.run(['git','apply','--index','-'],input=patch,check=True)
           PY
             git rm scripts/gitee-labels-finish.b64
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git commit -m 'fix(gitee): measure each tag tray locally and retain priority statuses at narrow widths'
+            git commit -m 'test(gitee): keep native view inspection and WebKit readiness on main actor'
             git push origin HEAD:refs/heads/feat/gitee-grouped-labels
           fi
           echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
