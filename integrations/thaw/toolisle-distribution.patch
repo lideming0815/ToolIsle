@@ -1,0 +1,562 @@
+--- a/MenuBarItemService/SourcePIDCache.swift
++++ b/MenuBarItemService/SourcePIDCache.swift
+@@ -561,7 +561,7 @@
+         }
+ 
+         let ccBundleID = "com.apple.controlcenter"
+-        let thawBundleID = "com.stonerl.Thaw"
++        let thawBundleID = "com.toolisle.Thaw"
+         var appsChecked = 0
+         var appsWithBar = 0
+         var appsSkipped = 0
+--- a/Shared/Services/MenuBarItemService.swift
++++ b/Shared/Services/MenuBarItemService.swift
+@@ -9,7 +9,7 @@
+ import Foundation
+ 
+ nonisolated enum MenuBarItemService {
+-    static let name = "com.stonerl.Thaw.MenuBarItemService"
++    static let name = "com.toolisle.Thaw.MenuBarItemService"
+ }
+ 
+ nonisolated extension MenuBarItemService {
+--- a/Shared/Utilities/DiagnosticLogger.swift
++++ b/Shared/Utilities/DiagnosticLogger.swift
+@@ -51,7 +51,7 @@
+         return home
+             .appendingPathComponent("Library", isDirectory: true)
+             .appendingPathComponent("Logs", isDirectory: true)
+-            .appendingPathComponent("Thaw", isDirectory: true)
++            .appendingPathComponent("ToolIsle-Thaw", isDirectory: true)
+     }
+ 
+     /// Returns whether any log files exist in the log directory.
+@@ -90,7 +90,7 @@
+ 
+     /// Internal logger for DiagnosticLogger's own messages.
+     private let osLog = Logger(
+-        subsystem: Bundle.main.bundleIdentifier ?? "com.stonerl.Thaw",
++        subsystem: Bundle.main.bundleIdentifier ?? "com.toolisle.Thaw",
+         category: "DiagnosticLogger"
+     )
+ 
+@@ -112,7 +112,7 @@
+ 
+     /// Serial queue for file I/O.
+     private let writeQueue = DispatchQueue(
+-        label: "com.stonerl.Thaw.DiagnosticLogger.writeQueue",
++        label: "com.toolisle.Thaw.DiagnosticLogger.writeQueue",
+         qos: .utility
+     )
+ 
+@@ -345,7 +345,7 @@
+ 
+     init(category: String) {
+         self.osLogger = Logger(
+-            subsystem: Bundle.main.bundleIdentifier ?? "com.stonerl.Thaw",
++            subsystem: Bundle.main.bundleIdentifier ?? "com.toolisle.Thaw",
+             category: category
+         )
+         self.category = category
+--- a/Thaw/Main/AppState.swift
++++ b/Thaw/Main/AppState.swift
+@@ -265,7 +265,9 @@
+                 if isPresented {
+                     self.openWindows.insert(.settings)
+                     // Start Sparkle consent flow the first time settings is shown.
+-                    if !Defaults.bool(forKey: .hasSeenUpdateConsent) {
++                    if Constants.isManagedByToolIsle {
++                        self.presentOnboardingIfNeeded()
++                    } else if !Defaults.bool(forKey: .hasSeenUpdateConsent) {
+                         self.isUpdateConsentPresented = true
+                     } else {
+                         self.updatesManager.startUpdaterIfNeeded()
+@@ -392,6 +394,18 @@
+     /// Relaunches the current app instance silently.
+     func restartSelf() {
+         guard !isRestarting else { return }
++        if Constants.isManagedByToolIsle {
++            // The host owns both processes and must await normal helper termination.
++            // Also gate reentrant requests while this modal notice is presented.
++            isRestarting = true
++            defer { isRestarting = false }
++            let alert = NSAlert()
++            alert.messageText = "Restart from ToolIsle"
++            alert.informativeText = "Restart ToolIsle to restart menu bar management safely."
++            alert.addButton(withTitle: "OK")
++            alert.runModal()
++            return
++        }
+         isRestarting = true
+ 
+         // Save image cache to disk before restarting so new instance can load it
+--- a/Thaw/Main/IceApp.swift
++++ b/Thaw/Main/IceApp.swift
+@@ -18,8 +18,21 @@
+ @main
+ enum ThawMain {
+     static func main() {
++        #if TOOLISLE_MANAGED
++            // Exercise the signed executable's real loader path before AppKit,
++            // AppState, permissions or menu bar layout are initialized.
++            if CommandLine.arguments.contains("--toolisle-launch-check") {
++                print("ToolIsle Thaw launch check passed")
++                return
++            }
++        #endif
+         guard !LayoutResetCommand.runIfRequested() else {
+             return
++        }
++        if Constants.isManagedByToolIsle {
++            // Opt in to the existing control transport, never to its caller whitelist.
++            // Registration preserves an explicit user choice to disable automation.
++            Defaults.store.register(defaults: [Defaults.Key.settingsURIEnabled.rawValue: true])
+         }
+         IceApp.main()
+     }
+--- a/Thaw/Main/Updates.swift
++++ b/Thaw/Main/Updates.swift
+@@ -8,8 +8,39 @@
+ 
+ import Combine
+ import Observation
++import SwiftUI
++
++#if TOOLISLE_MANAGED
++/// Updates are delivered only with the complete ToolIsle application.
++/// Keep the settings interface available without loading an unused updater.
++@MainActor
++@Observable
++final class UpdatesManager: NSObject {
++    let canCheckForUpdates = false
++    let lastUpdateCheckDate: Date? = nil
++
++    var automaticallyChecksForUpdates: Bool {
++        get { false }
++        set { }
++    }
++
++    var automaticallyDownloadsUpdates: Bool {
++        get { false }
++        set { }
++    }
++
++    var updateChannel: UpdateChannel {
++        get { .stable }
++        set { }
++    }
++
++    func performSetup(with _: AppState) { }
++    func startUpdaterIfNeeded() { }
++    @objc func checkForUpdates() { }
++    func checkForAlphaUpdateAfterCompatibilityWarning() { }
++}
++#else
+ import Sparkle
+-import SwiftUI
+ 
+ /// Manager for app updates.
+ @MainActor
+@@ -349,6 +380,8 @@
+         appState.userNotificationManager.removeDeliveredNotifications(with: [.updateCheck])
+     }
+ }
++
++#endif
+ 
+ // MARK: - UpdateChannel
+ 
+--- a/Thaw/MenuBar/ControlItem/ControlItem.swift
++++ b/Thaw/MenuBar/ControlItem/ControlItem.swift
+@@ -997,14 +997,16 @@
+ 
+         menu.addItem(.separator())
+ 
+-        let checkForUpdatesItem = NSMenuItem(
+-            title: String(localized: "Check for Updates…"),
+-            action: #selector(checkForUpdates),
+-            keyEquivalent: ""
+-        )
+-        checkForUpdatesItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "Check for Updates")
+-        checkForUpdatesItem.target = self
+-        menu.addItem(checkForUpdatesItem)
++        if !Constants.isManagedByToolIsle {
++            let checkForUpdatesItem = NSMenuItem(
++                title: String(localized: "Check for Updates…"),
++                action: #selector(checkForUpdates),
++                keyEquivalent: ""
++            )
++            checkForUpdatesItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "Check for Updates")
++            checkForUpdatesItem.target = self
++            menu.addItem(checkForUpdatesItem)
++        }
+ 
+         let supportItem = NSMenuItem(
+             title: String(localized: "Support \(Constants.displayName)…"),
+@@ -1026,16 +1028,18 @@
+         quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: "Quit")
+         menu.addItem(quitItem)
+ 
+-        let restartItem = NSMenuItem(
+-            title: String(localized: "Restart \(Constants.displayName)"),
+-            action: #selector(restartFromMenu),
+-            keyEquivalent: "q"
+-        )
+-        restartItem.keyEquivalentModifierMask = [.command, .option]
+-        restartItem.isAlternate = true
+-        restartItem.target = self
+-        restartItem.image = NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: "Restart")
+-        menu.addItem(restartItem)
++        if !Constants.isManagedByToolIsle {
++            let restartItem = NSMenuItem(
++                title: String(localized: "Restart \(Constants.displayName)"),
++                action: #selector(restartFromMenu),
++                keyEquivalent: "q"
++            )
++            restartItem.keyEquivalentModifierMask = [.command, .option]
++            restartItem.isAlternate = true
++            restartItem.target = self
++            restartItem.image = NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: "Restart")
++            menu.addItem(restartItem)
++        }
+ 
+         return menu
+     }
+--- a/Thaw/MenuBar/MenuBarItems/MenuBarItemImageCache.swift
++++ b/Thaw/MenuBar/MenuBarItems/MenuBarItemImageCache.swift
+@@ -348,7 +348,7 @@
+     /// Path to the cache file in Caches directory.
+     private static var cacheFileURL: URL? {
+         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+-        return cacheDir?.appendingPathComponent("com.stonerl.thaw/imageCache.json")
++        return cacheDir?.appendingPathComponent("com.toolisle.Thaw/imageCache.json")
+     }
+ 
+     /// Maximum age of disk cache before it's considered stale (30 seconds).
+--- a/Thaw/MenuBar/MenuBarManager.swift
++++ b/Thaw/MenuBar/MenuBarManager.swift
+@@ -777,16 +777,18 @@
+             quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: "Quit")
+             menu.addItem(quitItem)
+ 
+-            let restartItem = NSMenuItem(
+-                title: String(localized: "Restart \(Constants.displayName)"),
+-                action: #selector(restartFromSecondaryContextMenu),
+-                keyEquivalent: "q"
+-            )
+-            restartItem.keyEquivalentModifierMask = [.command, .option]
+-            restartItem.isAlternate = true
+-            restartItem.target = self
+-            restartItem.image = NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: "Restart")
+-            menu.addItem(restartItem)
++            if !Constants.isManagedByToolIsle {
++                let restartItem = NSMenuItem(
++                    title: String(localized: "Restart \(Constants.displayName)"),
++                    action: #selector(restartFromSecondaryContextMenu),
++                    keyEquivalent: "q"
++                )
++                restartItem.keyEquivalentModifierMask = [.command, .option]
++                restartItem.isAlternate = true
++                restartItem.target = self
++                restartItem.image = NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: "Restart")
++                menu.addItem(restartItem)
++            }
+         }
+ 
+         menu.popUp(positioning: nil, at: point, in: nil)
+--- a/Thaw/Resources/Info.plist
++++ b/Thaw/Resources/Info.plist
+@@ -2,6 +2,8 @@
+ <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+ <plist version="1.0">
+ <dict>
++	<key>ToolIsleManagedComponent</key>
++	<true/>
+ 	<key>SUFeedURL</key>
+ 	<string>https://thaw-app.github.io/updates/appcast.xml</string>
+ 	<key>SUPublicEDKey</key>
+@@ -10,7 +12,7 @@
+ 	<array>
+ 		<dict>
+ 			<key>CFBundleURLName</key>
+-			<string>com.stonerl.Thaw</string>
++			<string>com.toolisle.Thaw</string>
+ 			<key>CFBundleURLSchemes</key>
+ 			<array>
+ 				<string>thaw</string>
+--- a/Thaw/Settings/Models/FocusFilterIntent.swift
++++ b/Thaw/Settings/Models/FocusFilterIntent.swift
+@@ -44,7 +44,7 @@
+             return []
+         }
+         let manifestURL = appSupport
+-            .appendingPathComponent("Thaw/Profiles/profiles.json")
++            .appendingPathComponent("ToolIsle/Thaw/Profiles/profiles.json")
+ 
+         guard let data = try? Data(contentsOf: manifestURL) else { return [] }
+ 
+@@ -87,7 +87,7 @@
+             // Focus deactivated — clear the stored profile and notify.
+             Defaults.removeObject(forKey: .focusFilterRequestedProfileID)
+             DistributedNotificationCenter.default().postNotificationName(
+-                Notification.Name("com.stonerl.Thaw.focusFilterDeactivated"),
++                Notification.Name("com.toolisle.Thaw.focusFilterDeactivated"),
+                 object: nil,
+                 deliverImmediately: true
+             )
+@@ -96,7 +96,7 @@
+ 
+         Defaults.set(profile.id, forKey: .focusFilterRequestedProfileID)
+         DistributedNotificationCenter.default().postNotificationName(
+-            Notification.Name("com.stonerl.Thaw.focusFilterActivated"),
++            Notification.Name("com.toolisle.Thaw.focusFilterActivated"),
+             object: nil,
+             userInfo: ["profileID": profile.id],
+             deliverImmediately: true
+--- a/Thaw/Settings/Models/ProfileManager.swift
++++ b/Thaw/Settings/Models/ProfileManager.swift
+@@ -89,7 +89,7 @@
+                 fatalError("Application Support directory not found")
+             }
+             self.profilesDirectory = appSupport
+-                .appendingPathComponent("Thaw/Profiles", isDirectory: true)
++                .appendingPathComponent("ToolIsle/Thaw/Profiles", isDirectory: true)
+         }
+         manifestURL = self.profilesDirectory
+             .appendingPathComponent("profiles.json")
+@@ -133,7 +133,7 @@
+         focusFilterActivatedTask?.cancel()
+         focusFilterActivatedTask = debouncedNotificationTask(
+             center: DistributedNotificationCenter.default(),
+-            name: Notification.Name("com.stonerl.Thaw.focusFilterActivated"),
++            name: Notification.Name("com.toolisle.Thaw.focusFilterActivated"),
+             interval: .seconds(0.5)
+         ) { [weak self] in
+             await self?.applyFocusFilterProfile()
+@@ -143,7 +143,7 @@
+         focusFilterDeactivatedTask?.cancel()
+         focusFilterDeactivatedTask = debouncedNotificationTask(
+             center: DistributedNotificationCenter.default(),
+-            name: Notification.Name("com.stonerl.Thaw.focusFilterDeactivated"),
++            name: Notification.Name("com.toolisle.Thaw.focusFilterDeactivated"),
+             interval: .seconds(0.5)
+         ) { [weak self] in
+             await self?.handleFocusFilterDeactivated()
+--- a/Thaw/Settings/SettingsPanes/AboutSettingsPane.swift
++++ b/Thaw/Settings/SettingsPanes/AboutSettingsPane.swift
+@@ -33,10 +33,14 @@
+                     .padding(.vertical, 8)
+             }
+             IceSection("Updates") {
+-                automaticallyCheckForUpdates
+-                automaticallyDownloadUpdates
+-                updateChannel
+-                checkForUpdates
++                if Constants.isManagedByToolIsle {
++                    Text("Update the complete ToolIsle app to update this component.")
++                } else {
++                    automaticallyCheckForUpdates
++                    automaticallyDownloadUpdates
++                    updateChannel
++                    checkForUpdates
++                }
+             }
+         }
+         .onChange(of: colorScheme, initial: true) {
+--- a/Thaw/Settings/SettingsPanes/AdvancedSettingsPane.swift
++++ b/Thaw/Settings/SettingsPanes/AdvancedSettingsPane.swift
+@@ -94,7 +94,7 @@
+                 Text(
+                     """
+                     Writes detailed debug logs to a file for troubleshooting. \
+-                    Log files are saved to ~/Library/Logs/Thaw/. \
++                    Log files are saved to ~/Library/Logs/ToolIsle-Thaw/. \
+                     Disable when not needed to avoid unnecessary disk writes.
+                     """
+                 )
+--- a/Thaw/Settings/SettingsPanes/GeneralSettingsPane.swift
++++ b/Thaw/Settings/SettingsPanes/GeneralSettingsPane.swift
+@@ -48,9 +48,14 @@
+ 
+     // MARK: App Options
+ 
++    @ViewBuilder
+     private var appOptions: some View {
+-        LaunchAtLogin.Toggle {
+-            Text("Launch at Login")
++        if Constants.isManagedByToolIsle {
++            Text("Starts and stops with ToolIsle. Manage startup in ToolIsle settings.")
++        } else {
++            LaunchAtLogin.Toggle {
++                Text("Launch at Login")
++            }
+         }
+     }
+ 
+--- a/Thaw/Utilities/Constants.swift
++++ b/Thaw/Utilities/Constants.swift
+@@ -11,6 +11,9 @@
+ /// App-specific constants for the main Thaw target.
+ /// System-framework paths shared with XPC targets live in `SharedConstants`.
+ nonisolated enum Constants {
++    /// The host owns this component's startup and complete-package updates.
++    static let isManagedByToolIsle = Bundle.main.object(forInfoDictionaryKey: "ToolIsleManagedComponent") as? Bool == true
++
+     // swiftlint:disable force_unwrapping
+ 
+     /// The version string in the app's bundle.
+--- a/Thaw/Utilities/MacOSCompatibilityWarning.swift
++++ b/Thaw/Utilities/MacOSCompatibilityWarning.swift
+@@ -93,6 +93,15 @@
+     @MainActor
+     static func showIfNeeded(updatesManager: UpdatesManager?) {
+         let version = ProcessInfo.processInfo.operatingSystemVersion
++        if Constants.isManagedByToolIsle, shouldShow(for: version) {
++            let alert = NSAlert()
++            alert.alertStyle = .warning
++            alert.messageText = "This Thaw component does not support this macOS version."
++            alert.informativeText = "Update the complete ToolIsle app before enabling menu bar management on this system."
++            alert.addButton(withTitle: "OK")
++            alert.runModal()
++            return
++        }
+         guard let prompt = prompt(for: version, canSubscribe: updatesManager != nil) else {
+             return
+         }
+--- a/Thaw/Utilities/SettingsURIHandler.swift
++++ b/Thaw/Utilities/SettingsURIHandler.swift
+@@ -1349,16 +1349,16 @@
+ 
+ extension Notification.Name {
+     /// Posted when a setting is changed externally via Settings URI scheme.
+-    static let settingsDidChangeViaURI = Notification.Name("com.stonerl.Thaw.settingsDidChangeViaURI")
++    static let settingsDidChangeViaURI = Notification.Name("com.toolisle.Thaw.settingsDidChangeViaURI")
+ 
+     /// Posted when a per-display setting is changed externally via Settings URI scheme.
+-    static let perDisplaySettingsDidChangeViaURI = Notification.Name("com.stonerl.Thaw.perDisplaySettingsDidChangeViaURI")
++    static let perDisplaySettingsDidChangeViaURI = Notification.Name("com.toolisle.Thaw.perDisplaySettingsDidChangeViaURI")
+ 
+     /// Posted when a get request response is broadcast via distributed notification.
+-    static let settingsURIGetResponse = Notification.Name("com.stonerl.Thaw.settingsURIGetResponse")
++    static let settingsURIGetResponse = Notification.Name("com.toolisle.Thaw.settingsURIGetResponse")
+ 
+     /// Posted when the Settings URI whitelist changes.
+-    static let settingsURIWhitelistDidChange = Notification.Name("com.stonerl.Thaw.settingsURIWhitelistDidChange")
++    static let settingsURIWhitelistDidChange = Notification.Name("com.toolisle.Thaw.settingsURIWhitelistDidChange")
+ }
+ 
+ // MARK: - ExternalSettingsChange
+--- a/Thaw.xcodeproj/project.pbxproj
++++ b/Thaw.xcodeproj/project.pbxproj
+@@ -7,7 +7,6 @@
+ 	objects = {
+ 
+ /* Begin PBXBuildFile section */
+-		170423D92B56DE78004A2549 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 170423D82B56DE78004A2549 /* Sparkle */; };
+ 		175061912B1543DD003144CD /* LaunchAtLogin in Frameworks */ = {isa = PBXBuildFile; productRef = 175061902B1543DD003144CD /* LaunchAtLogin */; };
+ 		1787C4272B16890B002F50DF /* AXSwift6 in Frameworks */ = {isa = PBXBuildFile; productRef = 1787C4262B16890B002F50DF /* AXSwift6 */; };
+ 		17F71BB52B880B4500905CBA /* CompactSlider in Frameworks */ = {isa = PBXBuildFile; productRef = 17F71BB42B880B4500905CBA /* CompactSlider */; };
+@@ -106,7 +105,6 @@
+ 		716683272A767E6A006ABF84 /* Frameworks */ = {
+ 			isa = PBXFrameworksBuildPhase;
+ 			files = (
+-				170423D92B56DE78004A2549 /* Sparkle in Frameworks */,
+ 				7127A9FF2C4886D100D99DEF /* IfritStatic in Frameworks */,
+ 				9570E4A96CDEC0BEBAA5573F /* AsyncAlgorithms in Frameworks */,
+ 				A6DC49597D7F903C5E1B425F /* Algorithms in Frameworks */,
+@@ -180,7 +178,6 @@
+ 			packageProductDependencies = (
+ 				175061902B1543DD003144CD /* LaunchAtLogin */,
+ 				1787C4262B16890B002F50DF /* AXSwift6 */,
+-				170423D82B56DE78004A2549 /* Sparkle */,
+ 				17F71BB42B880B4500905CBA /* CompactSlider */,
+ 				7127A9FE2C4886D100D99DEF /* IfritStatic */,
+ 				43C5F05D006747974015EBD9 /* AsyncAlgorithms */,
+@@ -335,7 +332,9 @@
+ 			shellScript = (
+ 				"set -eu",
+ 				"",
+-				"if SHA=$(git -C \"${SRCROOT}\" rev-parse --short HEAD 2>/dev/null); then",
++				"if [ -n \"${TOOLISLE_THAW_UPSTREAM_COMMIT:-}\" ]; then",
++				"    SHA=\"${TOOLISLE_THAW_UPSTREAM_COMMIT}-toolisle\"",
++				"elif SHA=$(git -C \"${SRCROOT}\" rev-parse --short HEAD 2>/dev/null); then",
+ 				"    if ! git -C \"${SRCROOT}\" diff --quiet 2>/dev/null \\",
+ 				"       || ! git -C \"${SRCROOT}\" diff --cached --quiet 2>/dev/null; then",
+ 				"        SHA=\"${SHA}-dirty\"",
+@@ -365,7 +364,9 @@
+ 			shellScript = (
+ 				"set -eu",
+ 				"",
+-				"if SHA=$(git -C \"${SRCROOT}\" rev-parse --short HEAD 2>/dev/null); then",
++				"if [ -n \"${TOOLISLE_THAW_UPSTREAM_COMMIT:-}\" ]; then",
++				"    SHA=\"${TOOLISLE_THAW_UPSTREAM_COMMIT}-toolisle\"",
++				"elif SHA=$(git -C \"${SRCROOT}\" rev-parse --short HEAD 2>/dev/null); then",
+ 				"    if ! git -C \"${SRCROOT}\" diff --quiet 2>/dev/null \\",
+ 				"       || ! git -C \"${SRCROOT}\" diff --cached --quiet 2>/dev/null; then",
+ 				"        SHA=\"${SHA}-dirty\"",
+@@ -609,7 +610,7 @@
+ 				);
+ 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+ 				MARKETING_VERSION = "2.0.1";
+-				PRODUCT_BUNDLE_IDENTIFIER = com.stonerl.Thaw;
++				PRODUCT_BUNDLE_IDENTIFIER = com.toolisle.Thaw;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+ 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+@@ -650,7 +651,7 @@
+ 				);
+ 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+ 				MARKETING_VERSION = "2.0.1";
+-				PRODUCT_BUNDLE_IDENTIFIER = com.stonerl.Thaw;
++				PRODUCT_BUNDLE_IDENTIFIER = com.toolisle.Thaw;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+ 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+@@ -677,7 +678,7 @@
+ 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+ 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+ 				MARKETING_VERSION = "2.0.1";
+-				PRODUCT_BUNDLE_IDENTIFIER = com.stonerl.Thaw.MenuBarItemService;
++				PRODUCT_BUNDLE_IDENTIFIER = com.toolisle.Thaw.MenuBarItemService;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				REGISTER_APP_GROUPS = YES;
+ 				SKIP_INSTALL = YES;
+@@ -709,7 +710,7 @@
+ 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+ 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+ 				MARKETING_VERSION = "2.0.1";
+-				PRODUCT_BUNDLE_IDENTIFIER = com.stonerl.Thaw.MenuBarItemService;
++				PRODUCT_BUNDLE_IDENTIFIER = com.toolisle.Thaw.MenuBarItemService;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				REGISTER_APP_GROUPS = YES;
+ 				SKIP_INSTALL = YES;
+@@ -735,7 +736,7 @@
+ 				INFOPLIST_KEY_NSPrincipalClass = TestBootstrap;
+ 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+ 				MARKETING_VERSION = "1.3.0-beta.1";
+-				PRODUCT_BUNDLE_IDENTIFIER = com.stonerl.ThawTests;
++				PRODUCT_BUNDLE_IDENTIFIER = com.toolisle.ThawTests;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+ 				SWIFT_EMIT_LOC_STRINGS = NO;
+@@ -757,7 +758,7 @@
+ 				INFOPLIST_KEY_NSPrincipalClass = TestBootstrap;
+ 				MACOSX_DEPLOYMENT_TARGET = 26.0;
+ 				MARKETING_VERSION = "1.3.0-beta.1";
+-				PRODUCT_BUNDLE_IDENTIFIER = com.stonerl.ThawTests;
++				PRODUCT_BUNDLE_IDENTIFIER = com.toolisle.ThawTests;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+ 				SWIFT_EMIT_LOC_STRINGS = NO;
+@@ -885,11 +886,6 @@
+ 			package = 1FE809086FD6E22D3C218F67 /* XCRemoteSwiftPackageReference "swift-algorithms" */;
+ 			productName = Algorithms;
+ 		};
+-		170423D82B56DE78004A2549 /* Sparkle */ = {
+-			isa = XCSwiftPackageProductDependency;
+-			package = 170423D72B56DE78004A2549 /* XCRemoteSwiftPackageReference "Sparkle" */;
+-			productName = Sparkle;
+-		};
+ 		175061902B1543DD003144CD /* LaunchAtLogin */ = {
+ 			isa = XCSwiftPackageProductDependency;
+ 			package = 1750618F2B1543DD003144CD /* XCRemoteSwiftPackageReference "LaunchAtLogin-Modern" */;

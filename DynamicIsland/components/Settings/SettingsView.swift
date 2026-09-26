@@ -57,6 +57,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case timer
     case calendar
     case hudAndOSD
+    case menuBar
     case battery
     case stats
     case clipboard
@@ -76,7 +77,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general, .appearance:                                          return .core
         case .media, .liveActivities, .lockScreen, .devices:                 return .mediaAndDisplay
-        case .hudAndOSD, .battery:                                           return .system
+        case .hudAndOSD, .menuBar, .battery:                                 return .system
         case .timer, .calendar, .notes:                                      return .productivity
         case .clipboard, .screenAssistant, .colorPicker, .shelf,
              .downloads, .shortcuts:                                         return .utilities
@@ -99,6 +100,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .timer: return String(localized: "Timer")
         case .calendar: return String(localized: "Calendar")
         case .hudAndOSD: return String(localized: "Controls")
+        case .menuBar: return "菜单栏"
         case .battery: return String(localized: "Battery")
         case .stats: return String(localized: "Stats")
         case .clipboard: return String(localized: "Clipboard")
@@ -126,6 +128,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .timer: return "timer"
         case .calendar: return "calendar"
         case .hudAndOSD: return "dial.medium.fill"
+        case .menuBar: return "menubar.rectangle"
         case .battery: return "battery.100.bolt"
         case .stats: return "chart.xyaxis.line"
         case .clipboard: return "clipboard"
@@ -153,6 +156,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .timer: return .red
         case .calendar: return .cyan
         case .hudAndOSD: return .indigo
+        case .menuBar: return .blue
         case .battery: return Color(red: 0.202, green: 0.783, blue: 0.348, opacity: 1.000)
         case .stats: return .teal
         case .clipboard: return .mint
@@ -225,6 +229,7 @@ enum LockScreenSettingsSection: String, CaseIterable, Identifiable {
 
 private enum SettingsSearchIndex {
     static let entries: [SettingsSearchEntry] = [
+        SettingsSearchEntry(tab: .menuBar, title: "菜单栏管理", keywords: ["thaw", "menu bar", "菜单栏", "自动隐藏", "鼠标悬停", "浮条", "授权"], highlightID: nil),
         SettingsSearchEntry(tab: .gitee, title: "Gitee / GitLab 账户与项目", keywords: ["gitlab", "gitee", "issue", "令牌", "账户", "项目", "watch", "star"], highlightID: nil),
         // General
         SettingsSearchEntry(tab: .general, title: "Enable Minimalistic UI", keywords: ["minimalistic", "ui mode", "general"], highlightID: SettingsTab.general.highlightID(for: "Enable Minimalistic UI")),
@@ -613,6 +618,7 @@ private struct SettingsForm<Content: View>: View {
 struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
     @ObservedObject private var giteeSettingsNavigation = GISettingsNavigation.shared
+    @ObservedObject private var thawSettingsNavigation = ThawSettingsNavigation.shared
     @State private var searchText: String = ""
     @StateObject private var highlightCoordinator = SettingsHighlightCoordinator()
     @Default(.enableMinimalisticUI) var enableMinimalisticUI
@@ -684,6 +690,12 @@ struct SettingsView: View {
             searchText = ""
             selectedTab = .gitee
             giteeSettingsNavigation.request = nil
+        }
+        .onReceive(thawSettingsNavigation.$request) { request in
+            guard request != nil else { return }
+            searchText = ""
+            selectedTab = .menuBar
+            thawSettingsNavigation.request = nil
         }
         .onChange(of: searchText) { _, newValue in
             let matches = tabsMatchingSearch(newValue)
@@ -826,6 +838,7 @@ struct SettingsView: View {
             .devices,
             // System
             .hudAndOSD,
+            .menuBar,
             .battery,
             // Productivity
             .timer,
@@ -1087,6 +1100,10 @@ struct SettingsView: View {
         case .hudAndOSD:
             SettingsForm(tab: .hudAndOSD) {
                 HUDAndOSDSettingsView()
+            }
+        case .menuBar:
+            SettingsForm(tab: .menuBar) {
+                ThawSettingsView()
             }
         case .battery:
             SettingsForm(tab: .battery) {
@@ -4151,7 +4168,6 @@ struct CalendarSettings: View {
 
 struct About: View {
     @State private var showBuildNumber: Bool = false
-    @Default(.updateChannel) var updateChannel
     let updaterController: SPUStandardUpdaterController
     @Environment(\.openWindow) var openWindow
     var body: some View {
@@ -4236,44 +4252,6 @@ struct About: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.bottom, 5)
 
-                Section {
-                    ForEach(UpdateChannel.availableChannels) { channel in
-                        Button {
-                            updateChannel = channel
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: channel.badgeIcon)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(Color(channel.badgeColor))
-                                    .frame(width: 20, alignment: .center)
-
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(channel.displayName)
-                                        .foregroundStyle(.primary)
-                                    Text(channel.description)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                Spacer()
-
-                                if updateChannel == channel {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundStyle(Color(channel.badgeColor))
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    Text("Current build: \(UpdateChannel.buildChannel.displayName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } header: {
-                    Text("Update channel")
-                }
                 VStack(spacing: 0) {
                     Divider()
                         .padding(.bottom, 5)

@@ -168,3 +168,6 @@ TemporaryAssets/
 
 # Local application packages, build intermediates and logs
 /publish/*
+!/publish/publish.sh
+!integrations/thaw/build.py
+integrations/thaw/__pycache__/

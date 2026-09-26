@@ -16,13 +16,16 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-import Defaults
+import Foundation
 import Sparkle
 
-/// Custom Sparkle updater delegate that dynamically returns the feed URL
-/// based on the user's selected update channel preference.
+/// Fusion releases must update the host and its embedded components together.
 class AtollUpdaterDelegate: NSObject, SPUUpdaterDelegate {
-    func feedURLString(for updater: SPUUpdater) -> String? {
-        return Defaults[.updateChannel].feedURL.absoluteString
+    func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
+        throw NSError(
+            domain: "ToolIsle.ManualDistribution",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "请下载新的完整 DMG，退出当前应用后替换整个 App。"]
+        )
     }
 }

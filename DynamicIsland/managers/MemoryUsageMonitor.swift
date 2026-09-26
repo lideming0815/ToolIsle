@@ -94,20 +94,7 @@ final class MemoryUsageMonitor {
     }
 
     private func relaunchApplication() {
-        let workspace = NSWorkspace.shared
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.createsNewApplicationInstance = true
-
-        let appURL = workspace.urlForApplication(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "") ?? Bundle.main.bundleURL
-
-        workspace.openApplication(at: appURL, configuration: configuration) { _, error in
-            if let error {
-                Logger.log("[MemoryMonitor] Failed to launch replacement app: \(error.localizedDescription)", category: .error)
-            }
-            Task { @MainActor in
-                NSApplication.shared.terminate(nil)
-            }
-        }
+        ThawAppLifecycle.shared.restart()
     }
 
     private func currentResidentSize() -> UInt64? {

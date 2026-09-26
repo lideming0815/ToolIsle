@@ -331,6 +331,10 @@ struct DynamicIslandHeader: View {
                     }
                 }
 
+                if vm.notchState == .open {
+                    ThawNotchControl()
+                }
+
                 if vm.notchState == .open && showBatteryIndicator {
                     if enableMinimalisticUI {
                         // In minimalistic notch mode, show the battery pill only when

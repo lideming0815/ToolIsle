@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/thaw-app/Thaw",
+  "version": "2.0.1",
+  "commit": "d5eab80b4e1f62328a8b130994220e49524a48d1",
+  "archive_url": "https://codeload.github.com/thaw-app/Thaw/tar.gz/d5eab80b4e1f62328a8b130994220e49524a48d1",
+  "archive_sha256": "3874f1992f102ece184d654f8aa5dff21b6bbd694d9d105dbcccb55c917c6052",
+  "bundle_identifier": "com.toolisle.Thaw",
+  "xpc_bundle_identifier": "com.toolisle.Thaw.MenuBarItemService",
+  "patch": "toolisle-distribution.patch",
+  "minimum_macos": "26.0",
+  "architecture": "arm64"
+}

@@ -31,16 +31,14 @@ struct DynamicNotchApp: App {
     @Environment(\.openWindow) var openWindow
 
     let updaterController: SPUStandardUpdaterController
-    /// Retained delegate instance that dynamically selects the Sparkle feed URL
-    /// based on the user's update channel preference.
+    /// Retained delegate blocks upstream updates for the complete DMG distribution.
     private let updaterDelegate = AtollUpdaterDelegate()
 
     init() {
-        // Skip Sparkle's launch-time update check during UI testing.
-        // The AtollUpdaterDelegate overrides the feed URL at runtime
-        // based on the user's selected update channel.
+        // Fusion releases are upgraded by replacing the complete App from a DMG.
+        // Keep the controller for upstream settings compatibility, without starting it.
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: !AppRuntimeEnvironment.isUITesting,
+            startingUpdater: false,
             updaterDelegate: updaterDelegate, userDriverDelegate: nil)
 
         // Initialize the settings window controller with the updater controller
@@ -53,15 +51,11 @@ struct DynamicNotchApp: App {
                 SettingsWindowController.shared.showWindow()
             }
             Button("Gitee / GitLab Issues…") { GIReaderWindowController.shared.show() }
+            Menu("菜单栏") { ThawMenuItems() }
             CheckForUpdatesView(updater: updaterController.updater)
             Divider()
             Button("Restart ToolIsle") {
-                let configuration = NSWorkspace.OpenConfiguration()
-                configuration.createsNewApplicationInstance = true
-                NSWorkspace.shared.openApplication(
-                    at: Bundle.main.bundleURL, configuration: configuration)
-
-                NSApplication.shared.terminate(self)
+                ThawAppLifecycle.shared.restart()
             }
             Button("Quit", role: .destructive) {
                 NSApplication.shared.terminate(self)
@@ -155,6 +149,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        ThawAppLifecycle.shared.shouldTerminate(sender)
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         installTopMenuItemsIfNeeded()
         GIReaderSession.shared.applicationBecameActive()
@@ -165,7 +163,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        _ = handleIncomingShelfURLs(urls)
+        let remainingURLs = urls.filter { !ThawController.shared.handleCallback($0) }
+        _ = handleIncomingShelfURLs(remainingURLs)
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
@@ -701,6 +700,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if !AppRuntimeEnvironment.isUITesting {
+            ThawController.shared.startIfEnabled()
+        }
         // Explicit fixture-only preview. No behavior changes during ordinary launches.
         if ProcessInfo.processInfo.arguments.contains("--gitee-reader-demo") || ProcessInfo.processInfo.arguments.contains("--gitee-reader-smoke") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
