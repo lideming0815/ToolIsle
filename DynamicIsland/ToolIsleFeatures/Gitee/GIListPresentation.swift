@@ -17,16 +17,13 @@ struct GIProjectGroup: Identifiable {
 
 enum GIListPresentation {
     // Show All first, followed by the three common states. Selection defaults are independent of display order.
-    static let states = ["all", "unfinished", "progressing", "closed", "open", "rejected"]
-    static func stateTitle(_ state: String) -> String {
-        ["unfinished":"未完成", "progressing":"进行中", "closed":"已关闭",
-         "all":"全部", "open":"开启", "rejected":"已拒绝"][state] ?? state
-    }
+    static let states = GIStateProjection.standard
+    static func stateTitle(_ state: String) -> String { GIStateProjection.title(state) }
     static func candidates(_ items: [GIListItem], state: String, query: String) -> [GIListItem] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return items.filter {
-            (state == "all" || (state == "unfinished" ? ["open", "progressing"].contains($0.issue.state) : state == $0.issue.state)) &&
-            (q.isEmpty || $0.issue.title.localizedCaseInsensitiveContains(q) || $0.route.label.localizedCaseInsensitiveContains(q))
+            GIStateProjection.matches($0.issue, filter: state) &&
+            (q.isEmpty || $0.issue.title.localizedCaseInsensitiveContains(q) || $0.route.label.localizedCaseInsensitiveContains(q) || $0.route.repositoryURL.localizedCaseInsensitiveContains(q))
         }
     }
     static func filter(_ candidates: [GIListItem], labels: Set<String>) -> [GIListItem] {
@@ -40,7 +37,7 @@ enum GIListPresentation {
         for item in candidates {
             for label in item.issue.visibleLabels {
                 occurrences[label.key, default: []].insert(item.route)
-                repos[label.key, default: []].insert(item.route.repository)
+                repos[label.key, default: []].insert(item.route.repositoryURL)
                 colors[label.key, default: []].insert(label.hexColor ?? "")
             }
         }
@@ -52,23 +49,28 @@ enum GIListPresentation {
         }.sorted { a, b in a.count != b.count ? a.count > b.count : a.name < b.name }
     }
     static func groups(_ items: [GIListItem], repositories: [GIRepository]) -> [GIProjectGroup] {
-        let bucket = Dictionary(grouping: items, by: { $0.route.repository })
-        var seen = Set<String>()
-        let paths = repositories.map(\.path).filter { seen.insert($0).inserted } + bucket.keys.filter { !seen.contains($0) }.sorted()
-        let names = Dictionary(grouping: repositories, by: \.name)
-        return paths.compactMap { path in
-            guard let rows = bucket[path], !rows.isEmpty else { return nil }
-            let repo = repositories.first { $0.path == path }
-            let title: String
-            if let repo, !repo.name.isEmpty, (names[repo.name]?.count ?? 0) == 1 { title = repo.name } else { title = path }
-            return GIProjectGroup(id: repo.map { "repo:\($0.id)" } ?? path, title: title, path: path,
-                                  items: rows.sorted { a, b in
-                // The list service already uses update order; use stable tie-breaking within each group.
-                let aTime = a.issue.updated_at ?? "", bTime = b.issue.updated_at ?? ""
-                return aTime != bTime ? aTime > bTime : a.route.number < b.route.number
-            })
+        let bucket = Dictionary(grouping: items, by: { $0.route.repositoryURL })
+        let metadata = Dictionary(repositories.map { ($0.canonicalURL, $0) }, uniquingKeysWith: { first, _ in first })
+        let keys = Set(metadata.keys).union(bucket.keys).sorted()
+        return keys.map { url in
+            GIProjectGroup(id: url, title: url, path: metadata[url]?.path ?? bucket[url]?.first?.route.repository ?? url,
+                           items: (bucket[url] ?? []).sorted(by: newer))
         }
     }
+    static func newer(_ a: GIListItem, _ b: GIListItem) -> Bool {
+        let left = timestamp(a.issue.updated_at), right = timestamp(b.issue.updated_at)
+        if left != right { return left > right }
+        if a.route.repositoryURL != b.route.repositoryURL { return a.route.repositoryURL < b.route.repositoryURL }
+        return a.route.number < b.route.number
+    }
+    static func timestamp(_ value: String?) -> Date {
+        guard let value else { return .distantPast }
+        let parser = ISO8601DateFormatter()
+        if let date = parser.date(from: value) { return date }
+        parser.formatOptions.insert(.withFractionalSeconds)
+        return parser.date(from: value) ?? .distantPast
+    }
+
 }
 
 /// Shared deterministic packing rules for the actual SwiftUI trays and tests.

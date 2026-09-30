@@ -20,41 +20,37 @@ struct GIDedicatedSettingsView: View {
     private var filteredRepositories: [GIRepository] {
         store.repositories.filter { filter.isEmpty || $0.full_name.localizedCaseInsensitiveContains(filter) || $0.path.localizedCaseInsensitiveContains(filter) }
     }
-    private var hasUnappliedServer: Bool {
-        store.remote.isGitLab && (try? GIReaderRemote.gitLab(server)) != store.remote
-    }
-    private var selectedIDs: Set<Int64> { Set(store.selectedRepositories.map(\.id)) }
+    private var selectedIDs: Set<Int64> { Set(store.settingsSelectedRepositories.map(\.id)) }
 
     var body: some View {
         Form {
-            Section("平台") {
-                Picker("Issue 来源", selection: Binding(get: { store.remote.isGitLab }, set: { gitlab in
-                    applyServer(gitlab: gitlab)
-                })) {
-                    Text("Gitee").tag(false)
-                    Text("GitLab").tag(true)
-                }.pickerStyle(.segmented)
-                if store.remote.isGitLab {
-                    TextField("GitLab 站点地址", text: $server).textFieldStyle(.roundedBorder)
-                        .onSubmit { applyServer(gitlab: true) }
-                        .accessibilityIdentifier("gitlab-server-url")
-                    HStack {
-                        Text("支持 GitLab.com 或自建 HTTP/HTTPS 站点。填写网站首页地址，不含 /api/v4。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("应用地址") { applyServer(gitlab: true) }
+            Section("Git 连接") {
+                ForEach(store.connections) { connection in
+                    HStack(alignment: .top) {
+                        Toggle(isOn: Binding(get: { store.isEnabled(connection.remote) }, set: { store.setEnabled(connection.remote, $0) })) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(connection.remote.name + " · " + connection.remote.webURL.absoluteString)
+                                Text(store.connectionStatus(connection.remote)).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Button(store.remote == connection.remote ? "正在配置" : "配置") { store.useRemote(connection.remote) }
+                            .disabled(store.remote == connection.remote)
                     }
-                    if store.remote.usesHTTP {
-                        Text("当前使用 HTTP：令牌和 Issue 内容以明文传输。").font(.caption).foregroundStyle(.orange)
-                    }
-                    if hasUnappliedServer {
-                        Text("请先应用地址，再连接该站点账户。").font(.caption).foregroundStyle(.orange)
-                    }
-                    Text("当前站点：\(store.remote.webURL.absoluteString)")
-                        .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                HStack {
+                    Button("配置 Gitee") { store.useRemote(.gitee) }
+                    Button("配置 GitHub") { store.useRemote(.github) }
+                }
+                TextField("GitLab 站点地址", text: $server).textFieldStyle(.roundedBorder)
+                    .onSubmit { applyServer(gitlab: true) }.accessibilityIdentifier("gitlab-server-url")
+                HStack {
+                    Text("填写网站首页地址，不含 /api/v4。可添加多个 GitLab 站点。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("添加 / 配置 GitLab") { applyServer(gitlab: true) }
                 }
                 if let serverError { Text(serverError).font(.caption).foregroundStyle(.red) }
-                Text("一次查看一个平台。切换会清空当前阅读内容，各站点的账户与已选项目分别保留。")
+                Text("所有启用连接中已勾选的仓库会同时显示，并按完整仓库 URL 分组。这里切换配置对象不会清空其他站点的阅读内容。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -62,7 +58,7 @@ struct GIDedicatedSettingsView: View {
                     .accessibilityIdentifier("gitee-settings-enabled")
                 Text("只读查看关注项目的 Issue 与评论，不更改 Atoll 原有的媒体、刘海、锁屏或文件暂存行为。")
                     .font(.caption).foregroundStyle(.secondary)
-            } header: { Text(store.platformName) }
+            } header: { Text("Git 仓库") }
             if enabled {
                 Section("刘海预览") {
                     Stepper(value: Binding(get: { GINotchMetrics.clamp(notchMaximumItems) }, set: {
@@ -73,7 +69,10 @@ struct GIDedicatedSettingsView: View {
                     Text("默认 8 条，可设置 1–10 条。高度随筛选结果调整；屏幕空间不足时列表滚动。此限制不影响接口分页或阅读窗口。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("账户") {
+                Section("当前配置 · " + store.platformName) {
+                    Text(store.remote.webURL.absoluteString).font(.caption).textSelection(.enabled)
+                    if !store.isEnabled(store.remote) { Text("此连接已停用。请先在上方启用，再连接账户。").font(.caption).foregroundStyle(.secondary) }
+                    if store.remote.usesHTTP { Text("当前使用 HTTP：令牌和 Issue 内容以明文传输。").font(.caption).foregroundStyle(.orange) }
                     if let account = store.account {
                         LabeledContent("当前账户", value: account.displayName)
                         if !store.demoMode { Text("@\(account.login)").font(.caption).foregroundStyle(.secondary) }
@@ -86,18 +85,18 @@ struct GIDedicatedSettingsView: View {
                                 Spacer()
                                 Button("退出账户…", role: .destructive) { confirmDisconnect = true }
                             }
-                            if changeToken { GIConnectionView().id(store.remote).disabled(hasUnappliedServer) }
+                            if changeToken { GIConnectionView().id(store.remote).disabled(!store.isEnabled(store.remote)) }
                             if let error = store.connectionError, !changeToken {
                                 Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                             }
                         }
-                    } else { GIConnectionView().id(store.remote).disabled(hasUnappliedServer) }
+                    } else { GIConnectionView().id(store.remote).disabled(!store.isEnabled(store.remote)) }
                 }
                 if store.account != nil {
                     selectedSection
                     repositorySection
                     Section("阅读") {
-                        Toggle("加载 \(store.platformName) 远程图片", isOn: $store.loadRemoteImages)
+                        Toggle("加载当前 Issue 所属站点的远程图片", isOn: $store.loadRemoteImages)
                         Text("图片默认关闭。开启后只加载允许来源的图片，不向图片地址附加账户令牌。需要额外鉴权的图片请在平台网页打开。")
                             .font(.caption).foregroundStyle(.secondary)
                         HStack {
@@ -126,11 +125,11 @@ struct GIDedicatedSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Gitee / GitLab")
-        .onAppear { server = store.savedGitLabServer; store.activate() }
+        .navigationTitle("Git 仓库")
+        .onAppear { server = store.remote.gitLabURL?.absoluteString ?? store.savedGitLabServer; store.activate() }
         .onChange(of: enabled) { _, value in if value { store.activate() } }
         .onChange(of: store.remote) { _, _ in
-            changeToken = false; source = "subscriptions"; filter = ""; confirmDisconnect = false
+            changeToken = false; source = "subscriptions"; filter = ""; confirmDisconnect = false; server = store.remote.gitLabURL?.absoluteString ?? store.savedGitLabServer
         }
         .onChange(of: store.account?.id) { _, _ in changeToken = false; source = "subscriptions" }
         .onChange(of: source) { _, value in store.refreshRepositories(source: value, reset: true) }
@@ -143,23 +142,23 @@ struct GIDedicatedSettingsView: View {
         } message: {
             Text("连接到 \(pendingHTTPRemote?.webURL.absoluteString ?? "") 时，访问令牌和私有 Issue 内容将明文传输。请仅在你信任的网络中使用。")
         }
-        .confirmationDialog("移除当前站点保存的令牌并清除阅读会话？", isPresented: $confirmDisconnect) {
+        .confirmationDialog("移除此站点保存的令牌及其阅读内容？", isPresented: $confirmDisconnect) {
             Button("退出账户并移除令牌", role: .destructive) { store.disconnect() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("不会修改平台上的项目、Issue 或收藏。之后可重新连接。")
+            Text("其他 Git 连接不受影响。不会修改平台上的项目、Issue 或收藏。之后可重新连接。")
         }
     }
     private var selectedSection: some View {
-        Section("已选查看项目 · \(store.selectedRepositories.count)") {
-            if store.selectedRepositories.isEmpty {
+        Section("已选查看项目 · \(store.settingsSelectedRepositories.count)") {
+            if store.settingsSelectedRepositories.isEmpty {
                 Text("从下方\(store.projectSourceTitle)列表选择需要查看的项目。").foregroundStyle(.secondary)
             } else {
-                ForEach(store.selectedRepositories) { repo in
+                ForEach(store.settingsSelectedRepositories) { repo in
                     HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(repo.full_name).lineLimit(2)
-                            Text(repo.path.isEmpty ? "无法解析仓库路径，请刷新项目列表" : repo.path)
+                            Text(repo.path.isEmpty ? "无法解析仓库路径，请刷新项目列表" : repo.canonicalURL)
                                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                         }
                         Spacer(minLength: 8)
@@ -167,7 +166,7 @@ struct GIDedicatedSettingsView: View {
                             .buttonStyle(.borderless).help("仅从本机查看列表移除")
                     }
                 }
-                Button(store.loadingList ? "正在验证读取…" : "刷新已选项目 Issues") { store.refreshIssues(reset: true) }
+                Button(store.loadingList ? "正在验证读取…" : "刷新当前连接的已选仓库") { store.refreshIssues(reset: true, only: Set(store.settingsSelectedRepositories.map(\.canonicalURL))) }
                     .disabled(store.loadingList || store.demoMode)
                 if !store.listFailures.isEmpty {
                     ForEach(store.listFailures) { failure in
@@ -207,7 +206,7 @@ struct GIDedicatedSettingsView: View {
                         Toggle(isOn: Binding(get: { selectedIDs.contains(repo.id) }, set: { setSelected(repo, $0) })) {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(repo.full_name).lineLimit(2)
-                                Text(repo.path.isEmpty ? "仓库地址无效" : repo.path).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text(repo.path.isEmpty ? "仓库地址无效" : repo.canonicalURL).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }.toggleStyle(.checkbox).disabled(repo.path.isEmpty)
                     }
@@ -239,7 +238,7 @@ struct GIDedicatedSettingsView: View {
         } catch { serverError = error.localizedDescription }
     }
     private func setSelected(_ repo: GIRepository, _ selected: Bool) {
-        var values = store.selectedRepositories.filter { $0.id != repo.id }
+        var values = store.settingsSelectedRepositories.filter { $0.id != repo.id }
         if selected { values.append(repo) }
         store.applySelection(values)
     }

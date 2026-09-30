@@ -37,7 +37,8 @@ final class GINotchLayout: ObservableObject {
         let store = GIStore.shared
         let value = GINotchMetrics(count: store.filteredItems.count,
                                   limit: Defaults[.giteeNotchMaximumItems],
-                                  partialFailure: !store.items.isEmpty && !store.listFailures.isEmpty)
+                                  partialFailure: !store.items.isEmpty && !store.listFailures.isEmpty,
+                                  groupCount: Set(store.filteredItems.prefix(GINotchMetrics.clamp(Defaults[.giteeNotchMaximumItems])).map { $0.route.repositoryURL }).count)
         if value != metrics { metrics = value }
     }
     func size(base: CGSize, screenName: String?) -> CGSize {

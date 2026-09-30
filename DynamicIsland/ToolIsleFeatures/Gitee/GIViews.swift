@@ -64,21 +64,21 @@ struct GINotchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
-                Label("\(store.platformName) Issues", systemImage: "text.bubble")
+                Label("Issues", systemImage: "text.bubble")
                     .font(.system(size: 13, weight: .semibold))
                 if store.demoMode { Text("演示").font(.caption2).foregroundStyle(secondary) }
                 Spacer(minLength: 4)
-                if store.loadingList || store.isConnecting {
+                if store.loadingList || store.connectingAny {
                     ProgressView().controlSize(.mini).tint(.white)
-                        .accessibilityLabel("正在加载 \(store.platformName)")
+                        .accessibilityLabel("正在加载 Git 仓库")
                 }
                 Button { store.refreshIssues(reset: true) } label: {
                     Image(systemName: "arrow.clockwise").frame(width: 24, height: 24)
                 }.buttonStyle(.plain).help("刷新已选项目")
-                    .disabled(store.account == nil || store.loadingList || store.demoMode)
+                    .disabled(!store.hasReadingSources || store.loadingList || store.demoMode)
                 Button { GISettingsNavigation.shared.open() } label: {
                     Image(systemName: "gearshape").frame(width: 24, height: 24)
-                }.buttonStyle(.plain).help("\(store.platformName) 独立设置")
+                }.buttonStyle(.plain).help("Git 仓库设置")
             }
             .frame(height: 24)
             .accessibilityIdentifier("gitee-notch-header")
@@ -93,14 +93,14 @@ struct GINotchView: View {
 
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 4) {
-                    if store.account == nil {
-                        if store.isConnecting {
-                            message("正在连接 \(store.platformName)…", detail: "正在验证账户并恢复查看项目。")
+                    if !store.hasReadingSources {
+                        if store.connectingAny {
+                            message("正在连接 Git 仓库…", detail: "正在验证账户并恢复查看项目。")
                         } else if let error = store.connectionError {
                             message("\(store.platformName) 连接失败", detail: error)
                             action("检查账户设置") { GISettingsNavigation.shared.open() }
                         } else {
-                            message("尚未连接 \(store.platformName)", detail: "连接账户后查看关注项目的 Issue。")
+                            message("尚未连接 Git 仓库", detail: "连接账户后查看关注项目的 Issue。")
                             action("连接与设置…") { GISettingsNavigation.shared.open() }
                         }
                     } else if store.selectedRepositories.isEmpty {
@@ -122,10 +122,14 @@ struct GINotchView: View {
                             store.clearFilters()
                         }
                     } else {
-                        ForEach(Array(store.filteredItems.prefix(layout.metrics.limit))) { item in
+                        ForEach(GIListPresentation.groups(Array(store.filteredItems.prefix(layout.metrics.limit)), repositories: [])) { group in
+                            Text(group.title).font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(secondary).lineLimit(1).truncationMode(.middle)
+                                .frame(height: GINotchMetrics.groupHeaderHeight).help(group.title)
+                            ForEach(group.items) { item in
                             Button { GIReaderWindowController.shared.show(route: item.route) } label: {
                                 HStack(alignment: .center, spacing: 8) {
-                                    Image(systemName: item.issue.state == "closed" ? "checkmark.circle" : "circle.dotted")
+                                    Image(systemName: item.issue.projectedState == "closed" ? "checkmark.circle" : "circle.dotted")
                                         .font(.system(size: 13)).foregroundStyle(secondary)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(item.issue.title).font(.system(size: 12, weight: .medium))
@@ -143,7 +147,8 @@ struct GINotchView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain).help(item.issue.title + " · " + item.route.label)
-                            .accessibilityIdentifier("gitee-notch-issue-\(item.route.number)")
+                            .accessibilityIdentifier("git-notch-issue-\(item.route.url.absoluteString)")
+                        }
                         }
                     }
                     if !store.items.isEmpty && !store.listFailures.isEmpty {
@@ -209,13 +214,13 @@ struct GIReaderRootView: View {
                 VStack(spacing: 18) {
                     Image(systemName: "text.bubble").font(.system(size: 34)).foregroundStyle(.secondary)
                     Text("阅读项目中的讨论").font(.title2.weight(.semibold))
-                    Text("在 Atoll 中查看 \(store.platformName) Issue，并沿着关联链接连续阅读。\n仅在启用并连接账户后请求 \(store.platformName)；不读取本地文件。")
+                    Text("同时阅读 Gitee、GitLab、GitHub 已配置仓库的 Issue。\n仅在启用并连接账户后请求对应站点；不读取本地文件。")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
-                    Button("前往 \(store.platformName) 设置") { GISettingsNavigation.shared.open() }.buttonStyle(.borderedProminent)
+                    Button("前往 Git 仓库设置") { GISettingsNavigation.shared.open() }.buttonStyle(.borderedProminent)
                 }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if store.account == nil {
-                GIEmptyState(symbol: "person.badge.key", title: "尚未连接 \(store.platformName)", detail: "账户、查看项目和阅读偏好统一在设置侧栏的 \(store.platformName) 页面管理。") {
-                    Button("打开 \(store.platformName) 设置") { GISettingsNavigation.shared.open() }.buttonStyle(.borderedProminent)
+            } else if !store.hasReadingSources {
+                GIEmptyState(symbol: "person.badge.key", title: "尚未连接 Git 仓库", detail: "账户、查看仓库和阅读偏好统一在设置侧栏的“Git 仓库”页面管理。") {
+                    Button("打开 Git 仓库设置") { GISettingsNavigation.shared.open() }.buttonStyle(.borderedProminent)
                 }
             } else {
                 HSplitView {
@@ -233,28 +238,28 @@ struct GIReaderRootView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Button { showList.toggle() } label: { Image(systemName: "sidebar.left") }
-                .help(showList ? "收起列表" : "返回列表").disabled(store.account == nil)
+                .help(showList ? "收起列表" : "返回列表").disabled(!store.hasReadingSources)
             Button { store.moveHistory(-1) } label: { Image(systemName: "chevron.left") }
                 .disabled(!store.history.canBack).help("后退，恢复阅读位置").keyboardShortcut("[", modifiers: .command)
             Button { store.moveHistory(1) } label: { Image(systemName: "chevron.right") }
                 .disabled(!store.history.canForward).help("前进").keyboardShortcut("]", modifiers: .command)
-            Text(store.demoMode ? "\(store.platformName) · 离线演示" : "\(store.platformName) Issues").font(.headline)
+            Text(store.demoMode ? "Issues · 离线演示" : "Issues").font(.headline)
             Spacer(minLength: 8)
             if let visit = store.visit {
                 Menu { 
                     Button("缩小正文") { store.textScale = max(0.85, store.textScale - 0.1) }
                     Button("放大正文") { store.textScale = min(1.6, store.textScale + 0.1) }
-                    Toggle("加载 \(store.platformName) 远程图片", isOn: $store.loadRemoteImages)
+                    Toggle("加载 \(store.readingPlatformName) 远程图片", isOn: $store.loadRemoteImages)
 
                 } label: { Image(systemName: "textformat.size") }.help("阅读选项")
                 GICopyIssueButton(url: visit.route.url)
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                 Button { store.loadCurrent(force: true) } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(store.loadingDetail || store.demoMode).help("刷新当前 Issue").keyboardShortcut("r", modifiers: .command)
-                Button { store.browserOpen() } label: { Image(systemName: "arrow.up.right.square") }.help("在 \(store.platformName) 中打开")
+                Button { store.browserOpen() } label: { Image(systemName: "arrow.up.right.square") }.help("在 \(store.readingPlatformName) 中打开")
             }
             Button { GISettingsNavigation.shared.open() } label: { Image(systemName: "gearshape") }
-                .help("打开设置中的 \(store.platformName) 页面")
+                .help("打开 Git 仓库设置")
         }
         .buttonStyle(.borderless).controlSize(.regular)
         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -264,10 +269,10 @@ struct GIReaderRootView: View {
         if let visit = store.visit {
             VStack(spacing: 0) {
                 HStack {
-                    Text(visit.route.repository).lineLimit(1).truncationMode(.middle)
+                    Text(visit.route.repositoryURL).lineLimit(1).truncationMode(.middle)
                     Text("#\(visit.route.number)").monospaced()
                     Spacer()
-                    if !store.selectedRepositories.contains(where: { $0.path == visit.route.repository }) {
+                    if !store.selectedRepositories.contains(where: { $0.canonicalURL == visit.route.repositoryURL }) {
                         Label("关联项目", systemImage: "link").help("仅按需读取，不会自动加入查看列表")
                     }
                     if store.loadingDetail { ProgressView().controlSize(.small) }
@@ -283,7 +288,7 @@ struct GIReaderRootView: View {
                 }
                 Divider()
                 if let page = store.currentPage {
-                    GIWebReader(visit: visit, page: page, store: store)
+                    GIWebReader(visit: visit, page: page, store: store).id(visit.route.remote ?? .gitee)
                     Divider()
                     HStack {
                         Text("已加载 \(page.comments.count) 条评论").font(.caption).foregroundStyle(.secondary)
@@ -296,7 +301,7 @@ struct GIReaderRootView: View {
                     GIEmptyState(symbol: "exclamationmark.bubble", title: "暂时无法打开", detail: error) {
                         HStack {
                             Button("重试") { store.loadCurrent(force: true) }
-                            Button("在 \(store.platformName) 打开") { store.browserOpen() }
+                            Button("在 \(store.readingPlatformName) 打开") { store.browserOpen() }
                         }
                     }
                 } else {
@@ -319,7 +324,7 @@ private struct GIIssueListView: View {
         VStack(spacing: 0) {
             GIFilterBar()
             Divider()
-            if store.filteredItems.isEmpty {
+            if store.issueGroups.isEmpty {
                 VStack(spacing: 10) {
                     if store.loadingList { ProgressView().controlSize(.small) }
                     Text(store.loadingList ? "正在读取项目…" : (store.selectedRepositories.isEmpty ? "请先选择查看项目" : (!store.listFailures.isEmpty && store.items.isEmpty ? "项目读取失败，请查看下方原因或重试" : "已加载范围内没有匹配结果")))
@@ -340,18 +345,35 @@ private struct GIIssueListView: View {
                                 HStack(spacing: 7) {
                                     Image(systemName: store.collapsedProjects.contains(group.id) ? "chevron.right" : "chevron.down")
                                         .font(.system(size: 10, weight: .semibold)).frame(width: 12)
-                                    Text(group.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                                    Text(group.title).font(.system(size: 12, weight: .semibold)).lineLimit(2).textSelection(.enabled)
                                     Spacer(minLength: 2)
                                     Text("\(group.items.count)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
                                 }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                            }.buttonStyle(.plain).help(group.path + " · 当前匹配 \(group.items.count) 条")
+                            }.buttonStyle(.plain).help(group.title + " · 当前匹配 \(group.items.count) 条")
                                 .listRowSeparator(.hidden)
                                 .accessibilityValue(store.collapsedProjects.contains(group.id) ? "已折叠" : "已展开")
                             if !store.collapsedProjects.contains(group.id) {
+                                if let message = store.groupMessage(group.id) {
+                                    Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                }
+                                if store.repositoryStates[group.id]?.loading == true {
+                                    ProgressView("正在读取…").controlSize(.small)
+                                } else if group.items.isEmpty && store.groupMessage(group.id) == nil {
+                                    Text("已加载范围内没有匹配的 Issue").font(.caption).foregroundStyle(.secondary)
+                                }
                                 ForEach(group.items) { item in
                                     GIIssueRow(item: item, selected: store.selectedListID == item.route).tag(item.route)
                                         .contextMenu { Button("复制链接") { GIPasteboard.copy(item.route.url.absoluteString) } }
                                 }
+                                HStack {
+                                    Button("刷新仓库") { store.refreshIssues(reset: true, only: [group.id]) }
+                                    if store.repositoryStates[group.id]?.nextPage != nil {
+                                        Button("加载更多") { store.refreshIssues(reset: false, only: [group.id]) }
+                                    }
+                                    if let time = store.repositoryStates[group.id]?.lastSuccess {
+                                        Text(time, style: .time).font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                }.controlSize(.small).disabled(store.loadingList || store.demoMode)
                             }
                         }
                     }
@@ -386,7 +408,7 @@ private struct GIIssueListView: View {
                                 }.frame(maxHeight: 250)
                                 Divider()
                                 HStack {
-                                    Button("\(store.platformName) 设置…") { showFailures = false; GISettingsNavigation.shared.open() }
+                                    Button("Git 仓库设置…") { showFailures = false; GISettingsNavigation.shared.open() }
                                     Spacer()
                                     Button("重试失败项目") { showFailures = false; store.retryFailedRepositories() }
                                         .disabled(store.loadingList)
@@ -415,13 +437,17 @@ struct GIConnectionView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Text("连接站点：\(store.remote.webURL.absoluteString)").font(.caption).textSelection(.enabled)
             }
+            if store.remote.isGitHub {
+                Text("GitHub.com：为已选仓库授予 Issues 读取权限；Watch / Star 列表还可能需要 Watching / Starring 读取权限。列表权限不足不代表 Issue 无权限。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             SecureField("个人访问令牌", text: $token).textFieldStyle(.roundedBorder)
                 .onSubmit { submit() }.disabled(store.isConnecting)
             if let error = store.connectionError { Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
             HStack {
                 Button(store.isConnecting ? "正在验证…" : "验证并连接") { submit() }
                     .buttonStyle(.borderedProminent).disabled(token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isConnecting)
-                if store.isConnecting { ProgressView().controlSize(.small) }
+                if store.connectingAny { ProgressView().controlSize(.small) }
             }
             Text("令牌保存在本机钥匙串。正文与评论仅在内存缓存，退出账户或关闭功能后清除；不会发给 AI，也不会显示在锁屏。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -429,7 +455,7 @@ struct GIConnectionView: View {
             HStack {
                 Button("在 \(store.platformName) 管理令牌") { NSWorkspace.shared.open(store.remote.tokenURL) }
                 Spacer()
-                if store.account == nil && !store.remote.isGitLab { Button("先体验离线演示") { token = ""; store.startDemo() } }
+                if store.account == nil && store.remote == .gitee { Button("先体验离线演示") { token = ""; store.startDemo() } }
             }.controlSize(.small)
         }
     }
