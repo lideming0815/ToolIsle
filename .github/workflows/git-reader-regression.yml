@@ -22,10 +22,12 @@ jobs:
   regression:
     runs-on: macos-26
     timeout-minutes: 35
-    env:
-      DERIVED_DATA: ${{ runner.temp }}/GitReaderDerivedData
-      RESULTS: ${{ runner.temp }}/git-reader-results
     steps:
+      - name: Initialize runner-local paths
+        run: |
+          set -euo pipefail
+          echo "DERIVED_DATA=$RUNNER_TEMP/GitReaderDerivedData" >> "$GITHUB_ENV"
+          echo "RESULTS=$RUNNER_TEMP/git-reader-results" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           lfs: true
