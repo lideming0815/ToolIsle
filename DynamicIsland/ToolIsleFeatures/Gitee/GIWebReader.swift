@@ -24,7 +24,7 @@ struct GIWebReader: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
-        webView.loadHTMLString(Self.shell(for: store.remote), baseURL: URL(string: "https://toolisle.invalid/reader"))
+        webView.loadHTMLString(Self.shell(for: visit.route.remote ?? .gitee), baseURL: URL(string: "https://toolisle.invalid/reader"))
         return webView
     }
     func updateNSView(_ webView: WKWebView, context: Context) {
@@ -33,10 +33,10 @@ struct GIWebReader: NSViewRepresentable {
         context.coordinator.signature = signature
         var base = visit.route.url
         if let raw = page.issue.html_url, let canonical = URL(string: raw),
-           store.remote.contains(canonical),
+           (visit.route.remote ?? .gitee).contains(canonical),
            canonical.user == nil, canonical.password == nil { base = canonical }
         let payload: [String: Any] = [
-            "visit": visit.id.uuidString, "base": base.absoluteString, "imageOrigins": store.remote.imageOrigins,
+            "visit": visit.id.uuidString, "base": base.absoluteString, "imageOrigins": (visit.route.remote ?? .gitee).imageOrigins,
             "title": page.issue.title, "state": page.issue.stateTitle,
             "author": page.issue.user?.displayName ?? "", "updated": page.issue.updated_at ?? "",
             "body": page.issue.body ?? "", "fragment": visit.anchorHandled ? "" : (visit.fragment ?? ""),
@@ -76,7 +76,7 @@ struct GIWebReader: NSViewRepresentable {
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             ready = false; signature = ""
             store.notice = "阅读进程已重启，请刷新当前 Issue。"
-            webView.loadHTMLString(GIWebReader.shell(for: store.remote), baseURL: URL(string: "https://toolisle.invalid/reader"))
+            webView.loadHTMLString(GIWebReader.shell(for: store.readingRemote), baseURL: URL(string: "https://toolisle.invalid/reader"))
         }
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.frameInfo.isMainFrame, message.webView?.url?.host == "toolisle.invalid",

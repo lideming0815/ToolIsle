@@ -114,7 +114,7 @@ struct TabSelectionView: View {
             }
         }
         if enableGiteeReader {
-            tabsArray.append(TabModel(label: issueStore.platformName, icon: "text.bubble", view: .giteeIssues))
+            tabsArray.append(TabModel(label: "Issues", icon: "text.bubble", view: .giteeIssues))
         }
         return tabsArray
     }

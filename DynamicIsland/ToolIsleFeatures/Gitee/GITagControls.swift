@@ -11,7 +11,7 @@ struct GITagSpec: Identifiable {
 }
 enum GITagPalette {
     static func state(_ value: String) -> String? {
-        ["open":"238636", "unfinished":"237A57", "progressing":"2479C9", "closed":"8957BE", "rejected":"B75A26"][value]
+        ["open":"238636", "unfinished":"237A57", "progressing":"2479C9", "closed":"8957BE", "rejected":"B75A26"][GIStateProjection.customParts(value)?.first ?? GIStateProjection.canonical(value)]
     }
     static func color(_ hex: String?, dark: Bool, text: Bool = false) -> Color {
         let rgb = UInt32(hex ?? "7B8490", radix: 16) ?? 0x7B8490
@@ -141,7 +141,7 @@ struct GITagFace: View {
 struct GIStatusFilters: View {
     @ObservedObject private var store = GIStore.shared
     private var states: [String] {
-        store.availableStates + Set(store.items.map { $0.issue.state }).subtracting(store.availableStates).sorted()
+        store.availableStates + Set(store.items.map { $0.issue.statusFilterKey }).subtracting(store.availableStates).sorted()
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -266,7 +266,7 @@ struct GIIssueTags: View {
     let issue: GIIssue
     var body: some View {
         let labels = issue.visibleLabels
-        let tags = [GITagSpec(id: "state", title: issue.stateTitle, color: GITagPalette.state(issue.state), state: true)] +
+        let tags = [GITagSpec(id: "state", title: issue.stateTitle, color: GITagPalette.state(issue.projectedState), state: true)] +
             labels.map { GITagSpec(id: "label:" + $0.key, title: $0.key, color: $0.hexColor) }
         GIChipTray(tags: tags, maxRows: 1, selectable: false, compactOverflow: true) {
             VStack(alignment: .leading, spacing: 10) {

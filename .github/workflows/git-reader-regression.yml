@@ -1,0 +1,64 @@
+name: Git repository reader regression
+on:
+  push:
+    branches: [dev, "feat/**"]
+  pull_request:
+    paths:
+      - 'DynamicIsland/ToolIsleFeatures/Gitee/**'
+      - 'DynamicIsland/components/Settings/SettingsView.swift'
+      - 'DynamicIsland/components/Tabs/TabSelectionView.swift'
+      - 'DynamicIsland/DynamicIslandApp.swift'
+      - 'tests/*Reader*'
+      - 'tests/*Git*'
+      - 'tests/test_gitee*'
+      - 'scripts/test_git_reader*'
+      - '.github/workflows/git-reader-regression.yml'
+permissions:
+  contents: read
+concurrency:
+  group: git-reader-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      DERIVED_DATA: ${{ runner.temp }}/GitReaderDerivedData
+      RESULTS: ${{ runner.temp }}/git-reader-results
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Record source and run portable regressions
+        run: |
+          set -euo pipefail
+          mkdir -p "$RESULTS"
+          git rev-parse HEAD > "$RESULTS/source-commit.txt"
+          { sw_vers; xcodebuild -version; swift --version; } > "$RESULTS/environment.txt"
+          bash scripts/test_git_reader.sh 2>&1 | tee "$RESULTS/core-regressions.log"
+      - name: Prepare native toolchain
+        run: |
+          sudo xcodebuild -runFirstLaunch
+          sudo xcodebuild -downloadComponent MetalToolchain
+      - name: Build the actual application
+        run: |
+          set -euo pipefail
+          xcodebuild build -project DynamicIsland.xcodeproj -scheme DynamicIsland \
+            -configuration Debug -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RESULTS/application-build.log"
+      - name: Test actual multi-connection Store with isolated credentials
+        run: |
+          set -euo pipefail
+          bash scripts/test_git_reader_native.sh 2>&1 | tee "$RESULTS/native-store-regressions.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: git-reader-validation
+          path: ${{ runner.temp }}/git-reader-results/
+          retention-days: 7

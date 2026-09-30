@@ -5,30 +5,54 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// The optional reader has one active site. Gitee's existing persistence keys stay unchanged.
+enum GIProvider: String, Codable, CaseIterable { case gitee, gitlab, github }
+
+/// A credential boundary, not the currently selected UI tab. Legacy keys remain readable.
 struct GIReaderRemote: Codable, Hashable {
+    let provider: GIProvider
     let gitLabURL: URL?
-    static let gitee = GIReaderRemote(gitLabURL: nil)
-    var isGitLab: Bool { gitLabURL != nil }
-    var usesHTTP: Bool { gitLabURL?.scheme == "http" }
-    var name: String { isGitLab ? "GitLab" : "Gitee" }
-    var webURL: URL { gitLabURL ?? URL(string: "https://gitee.com")! }
+    static let gitee = GIReaderRemote(provider: .gitee, gitLabURL: nil)
+    static let github = GIReaderRemote(provider: .github, gitLabURL: nil)
+    private init(provider: GIProvider, gitLabURL: URL?) { self.provider = provider; self.gitLabURL = gitLabURL }
+    private enum CodingKeys: String, CodingKey { case provider, gitLabURL }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let url = try c.decodeIfPresent(URL.self, forKey: .gitLabURL)
+        let kind = try c.decodeIfPresent(GIProvider.self, forKey: .provider) ?? (url == nil ? .gitee : .gitlab)
+        switch kind {
+        case .gitee: self = .gitee
+        case .github: self = .github
+        case .gitlab:
+            guard let url else { throw GIServiceError.invalidServer }
+            self = try Self.gitLab(url.absoluteString)
+        }
+    }
+    var isGitLab: Bool { provider == .gitlab }
+    var isGitHub: Bool { provider == .github }
+    var usesHTTP: Bool { webURL.scheme == "http" }
+    var name: String { [.gitee: "Gitee", .gitlab: "GitLab", .github: "GitHub"][provider]! }
+    var webURL: URL { gitLabURL ?? URL(string: isGitHub ? "https://github.com" : "https://gitee.com")! }
     var storagePrefix: String {
+        if isGitHub { return "toolisle.github" }
         guard let gitLabURL else { return "toolisle.gitee" }
         return "toolisle.gitlab." + Data(gitLabURL.absoluteString.utf8).base64EncodedString()
     }
-    var credentialService: String {
-        isGitLab ? "io.github.lideming0815.toolisle.gitlab-reader" : "io.github.lideming0815.toolisle.gitee-reader"
-    }
-    var credentialAccount: String { gitLabURL?.absoluteString ?? "gitee.com" }
+    var credentialService: String { "io.github.lideming0815.toolisle.\(provider.rawValue)-reader" }
+    var credentialAccount: String { gitLabURL?.absoluteString ?? (isGitHub ? "github.com" : "gitee.com") }
     var imageOrigins: [String] {
+        if isGitHub { return ["https://github.com", "https://user-images.githubusercontent.com", "https://private-user-images.githubusercontent.com", "https://raw.githubusercontent.com"] }
         guard isGitLab else { return ["https://gitee.com", "https://foruda.gitee.com", "https://images.gitee.com"] }
         var c = URLComponents(url: webURL, resolvingAgainstBaseURL: false)!
         c.path = ""
         return [c.url!.absoluteString]
     }
     var tokenURL: URL {
-        webURL.appendingPathComponent(isGitLab ? "-/user_settings/personal_access_tokens" : "profile/personal_access_tokens")
+        webURL.appendingPathComponent(isGitHub ? "settings/personal-access-tokens" : (isGitLab ? "-/user_settings/personal_access_tokens" : "profile/personal_access_tokens"))
+    }
+    func repositoryURL(_ path: String) -> URL {
+        var url = webURL
+        for part in path.split(separator: "/") { url.appendPathComponent(String(part)) }
+        return url
     }
     /// HTTP(S), optional port and reverse-proxy prefix. Never accept an API URL or credentials.
     static func gitLab(_ input: String) throws -> Self {
@@ -47,10 +71,11 @@ struct GIReaderRemote: Codable, Hashable {
         if c.port == (c.scheme == "http" ? 80 : 443) { c.port = nil }
         while c.path.hasSuffix("/") { c.path.removeLast() }
         guard let url = c.url else { throw GIServiceError.invalidServer }
-        return GIReaderRemote(gitLabURL: url)
+        return GIReaderRemote(provider: .gitlab, gitLabURL: url)
     }
     func contains(_ url: URL) -> Bool {
         guard url.user == nil, url.password == nil, url.scheme?.lowercased() == webURL.scheme else { return false }
+        if isGitHub { return url.host?.lowercased() == "github.com" && (url.port == nil || url.port == 443) }
         if !isGitLab { return GIIssueLinks.hosts.contains(url.host?.lowercased() ?? "") && (url.port == nil || url.port == 443) }
         let defaultPort = usesHTTP ? 80 : 443
         guard url.host?.lowercased() == webURL.host?.lowercased(), (url.port ?? defaultPort) == (webURL.port ?? defaultPort) else { return false }
@@ -64,6 +89,12 @@ struct GIReaderRemote: Codable, Hashable {
         !number.isEmpty && number.allSatisfy { $0.isASCII && $0.isNumber } && (Int64(number) ?? 0) > 0
     }
     func issueRoute(_ url: URL) -> GIIssueRoute? {
+        if isGitHub {
+            guard contains(url), let c = URLComponents(url: url, resolvingAgainstBaseURL: false), !c.percentEncodedPath.contains("%") else { return nil }
+            let p = url.path.split(separator: "/").map(String.init)
+            guard p.count == 4, p[2] == "issues", p.prefix(2).allSatisfy(GIRepositoryAddress.validSlug), Self.validIID(p[3]) else { return nil }
+            return GIIssueRoute(repository: p.prefix(2).joined(separator: "/").lowercased(), number: String(Int64(p[3])!), remote: self)
+        }
         guard isGitLab, contains(url),
               let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
               !c.percentEncodedPath.contains("%") else { return nil }
@@ -84,6 +115,29 @@ protocol GIIssueService: AnyObject, Sendable {
     func issues(repository: String, page: Int) async throws -> [GIIssue]
     func issue(_ route: GIIssueRoute) async throws -> GIIssue
     func comments(_ route: GIIssueRoute, page: Int) async throws -> [GIComment]
+    func repositoryPage(source: String, page: Int) async throws -> GIResultPage<GIRepository>
+    func issuePage(repository: String, page: Int) async throws -> GIResultPage<GIIssue>
+    func commentPage(_ route: GIIssueRoute, page: Int) async throws -> GIResultPage<GIComment>
+}
+
+/// Pagination metadata is determined BEFORE any provider-specific filtering (e.g. GitHub PRs).
+struct GIResultPage<Item> {
+    let items: [Item]
+    let nextPage: Int?
+}
+extension GIIssueService {
+    func repositoryPage(source: String, page: Int) async throws -> GIResultPage<GIRepository> {
+        let values = try await repositories(source: source, page: page)
+        return GIResultPage(items: values, nextPage: values.count == 50 ? page + 1 : nil)
+    }
+    func issuePage(repository: String, page: Int) async throws -> GIResultPage<GIIssue> {
+        let values = try await issues(repository: repository, page: page)
+        return GIResultPage(items: values, nextPage: values.count == 50 ? page + 1 : nil)
+    }
+    func commentPage(_ route: GIIssueRoute, page: Int) async throws -> GIResultPage<GIComment> {
+        let values = try await comments(route, page: page)
+        return GIResultPage(items: values, nextPage: values.count == 50 ? page + 1 : nil)
+    }
 }
 
 struct GIUser: Codable, Hashable {
@@ -140,11 +194,16 @@ struct GIRepository: Codable, Identifiable, Hashable {
     let description: String?
     let html_url: String?
     let gitLabPath: String?
+    var readerRemote: GIReaderRemote? = nil
+    var remote: GIReaderRemote { readerRemote ?? .gitee }
+    var canonicalURL: String { remote.repositoryURL(remote.isGitHub ? path.lowercased() : path).absoluteString }
+    var scopedID: String { remote.storagePrefix + ":" + String(id) }
+    func on(_ site: GIReaderRemote) -> Self { var copy = self; copy.readerRemote = site == .gitee ? nil : site; return copy }
     let repositoryPath: String?
     let namespace: GIRepositorySpace?
     let owner: GIRepositorySpace?
     enum CodingKeys: String, CodingKey {
-        case id, full_name, name, description, html_url, namespace, owner, gitLabPath
+        case id, full_name, name, description, html_url, namespace, owner, gitLabPath, readerRemote
         case repositoryPath = "path"
     }
     init(id: Int64, full_name: String, name: String, description: String?, html_url: String?,
@@ -154,6 +213,10 @@ struct GIRepository: Codable, Identifiable, Hashable {
         self.gitLabPath = gitLabPath; self.repositoryPath = repositoryPath; self.namespace = namespace; self.owner = owner
     }
     var path: String {
+        if remote.isGitHub {
+            let parts = full_name.split(separator: "/", omittingEmptySubsequences: false)
+            return parts.count == 2 && parts.allSatisfy({ GIRepositoryAddress.validSlug(String($0)) }) ? full_name : ""
+        }
         if let gitLabPath { return GIReaderRemote.validProject(gitLabPath) ? gitLabPath : "" }
         let web = html_url.flatMap(GIRepositoryAddress.legacyPath)
         let fallback = GIRepositoryAddress.legacyPath(full_name)
@@ -197,6 +260,55 @@ struct GIIssueLabel: Codable, Hashable {
     }
 }
 
+/// No guessed numeric workflow-state mapping. Unknown states remain visible and selectable.
+enum GIStateProjection {
+    static let standard = ["all", "unfinished", "progressing", "closed", "open", "rejected"]
+    static func canonical(_ raw: String) -> String {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch value {
+        case "opened", "open": return "open"
+        case "in_progress", "in-progress", "in progress", "progressing": return "progressing"
+        case "closed": return "closed"
+        case "rejected": return "rejected"
+        default: return value
+        }
+    }
+    static func title(_ key: String) -> String {
+        if let pair = customParts(key) { return "\(pair[1])（\(title(pair[0]))）" }
+        return ["all":"全部", "unfinished":"未完成", "open":"开启", "progressing":"进行中", "closed":"已关闭", "rejected":"已拒绝"][canonical(key)] ?? key
+    }
+    static func customParts(_ key: String) -> [String]? {
+        guard key.hasPrefix("status:"), let data = Data(base64Encoded: String(key.dropFirst(7))),
+              let pair = try? JSONDecoder().decode([String].self, from: data), pair.count == 2,
+              !pair[0].hasPrefix("status:") else { return nil }
+        return pair
+    }
+    static func customKey(base: String, title: String) -> String {
+        "status:" + (try! JSONEncoder().encode([base, title])).base64EncodedString()
+    }
+    static func matches(_ issue: GIIssue, filter: String) -> Bool {
+        if filter == "all" { return true }
+        if filter == "unfinished" { return ["open", "progressing"].contains(issue.projectedState) }
+        if filter.hasPrefix("status:") { return filter == issue.statusFilterKey }
+        return canonical(filter) == issue.projectedState
+    }
+}
+struct GIWorkflowState: Codable {
+    let title: String?
+    let name: String?
+    let state: String?
+    private enum CodingKeys: String, CodingKey { case title, name, state }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try? c.decode(String.self, forKey: .title)
+        name = try? c.decode(String.self, forKey: .name)
+        state = try? c.decode(String.self, forKey: .state)
+    }
+    var displayName: String? {
+        [title, name].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+    }
+}
+
 struct GIIssue: Codable, Identifiable {
     let id: Int64
     let number: String
@@ -209,7 +321,22 @@ struct GIIssue: Codable, Identifiable {
     let comments: Int?
     /// nil means the response did not provide usable label metadata; [] means none.
     var labels: [GIIssueLabel]? = nil
-    enum CodingKeys: String, CodingKey { case id, number, title, state, body, html_url, user, updated_at, comments, labels }
+    var issue_state: GIWorkflowState? = nil
+    var projectedState: String {
+        let base = GIStateProjection.canonical(state)
+        // A known transport state wins; custom titles and numeric IDs are NOT lifecycle states.
+        if ["open", "progressing", "closed", "rejected"].contains(base) { return base }
+        if let nested = issue_state?.state {
+            let key = GIStateProjection.canonical(nested)
+            if ["open", "progressing", "closed", "rejected"].contains(key) { return key }
+        }
+        return base
+    }
+    var statusFilterKey: String {
+        guard let title = issue_state?.displayName, title != GIStateProjection.title(projectedState) else { return projectedState }
+        return GIStateProjection.customKey(base: projectedState, title: title)
+    }
+    enum CodingKeys: String, CodingKey { case id, number, title, state, body, html_url, user, updated_at, comments, labels, issue_state }
     init(id: Int64, number: String, title: String, state: String, body: String?, html_url: String?,
          user: GIUser?, updated_at: String?, comments: Int?, labels: [GIIssueLabel]? = nil) {
         self.id = id; self.number = number; self.title = title; self.state = state
@@ -228,20 +355,13 @@ struct GIIssue: Codable, Identifiable {
         updated_at = try c.decodeIfPresent(String.self, forKey: .updated_at)
         comments = try c.decodeIfPresent(Int.self, forKey: .comments)
         labels = try? c.decode([GIIssueLabel].self, forKey: .labels)
+        issue_state = try? c.decode(GIWorkflowState.self, forKey: .issue_state)
     }
     var visibleLabels: [GIIssueLabel] {
         var seen = Set<String>()
         return (labels ?? []).filter { !$0.key.isEmpty && seen.insert($0.key).inserted }
     }
-    var stateTitle: String {
-        switch state {
-        case "open": return "开启"
-        case "progressing": return "进行中"
-        case "closed": return "已关闭"
-        case "rejected": return "已拒绝"
-        default: return state
-        }
-    }
+    var stateTitle: String { issue_state?.displayName ?? GIStateProjection.title(projectedState) }
 }
 
 struct GIComment: Codable, Identifiable {
@@ -256,8 +376,8 @@ struct GIIssueRoute: Codable, Hashable {
     let number: String
     let remote: GIReaderRemote?
     init(repository: String, number: String, remote: GIReaderRemote = .gitee) {
-        self.repository = repository; self.number = number
-        self.remote = remote.isGitLab ? remote : nil
+        self.repository = remote.isGitHub ? repository.lowercased() : repository; self.number = number
+        self.remote = remote == .gitee ? nil : remote
     }
     var url: URL {
         var result = (remote ?? .gitee).webURL
@@ -268,6 +388,7 @@ struct GIIssueRoute: Codable, Hashable {
         return result
     }
     var label: String { "\(repository) #\(number)" }
+    var repositoryURL: String { (remote ?? .gitee).repositoryURL(repository).absoluteString }
 }
 
 enum GILinkTarget: Equatable {
@@ -296,7 +417,7 @@ enum GIIssueLinks {
         if (c.queryItems ?? []).contains(where: { sensitive.contains($0.name.lowercased()) }) { return .blocked }
         guard scheme != "mailto" else { return .external(url) }
         guard let host = c.host?.lowercased(), !host.isEmpty else { return .blocked }
-        if remote.isGitLab {
+        if remote.isGitLab || remote.isGitHub {
             if let route = remote.issueRoute(url) {
                 return .issue(route, fragment: c.fragment.flatMap { $0.isEmpty ? nil : $0 })
             }
@@ -370,6 +491,13 @@ struct GIHistory {
         visits[i].scrollY = y.isFinite ? max(0, y) : 0
         if let anchorHandled { visits[i].anchorHandled = anchorHandled }
     }
+    mutating func remove(remote: GIReaderRemote) {
+        let currentID = current?.id
+        let keep = visits.enumerated().filter { ($0.element.route.remote ?? .gitee) != remote }
+        let previous = keep.lastIndex { $0.offset <= position }
+        visits = keep.map(\.element)
+        position = currentID.flatMap { id in visits.firstIndex { $0.id == id } } ?? previous ?? (visits.isEmpty ? -1 : 0)
+    }
     mutating func reset() { self = GIHistory() }
 }
 
@@ -399,7 +527,7 @@ struct GIRepositoryFailure: Identifiable {
         case .missingToken: status = 401
         case .forbidden: status = 403
         case .missing: status = 404
-        case .throttled: status = 429
+        case .throttled, .throttledUntil: status = 429
         case .response(let code): status = code
         default: status = nil
         }
@@ -408,12 +536,14 @@ struct GIRepositoryFailure: Identifiable {
 
 enum GIServiceError: Error, LocalizedError {
     case missingToken, forbidden, missing, throttled, response(Int), format, tooLarge, unsafeRedirect, invalidServer
+    case throttledUntil(Date)
     var errorDescription: String? {
         switch self {
         case .invalidServer: return "请输入有效的 GitLab HTTP 或 HTTPS 站点地址，不含令牌、查询参数或 /api/v4。"
         case .missingToken: return "授权已失效，请重新连接账户。"
         case .forbidden: return "当前账户没有权限，或接口暂时限制访问。请检查令牌权限后重试。"
         case .missing: return "该内容不存在，或当前账户没有访问权限。"
+        case .throttledUntil(let date): return "接口限流，请在 \(date.formatted(date: .omitted, time: .standard)) 后重试。"
         case .throttled: return "请求过于频繁。请稍后手动重试。"
         case .response(let code): return "平台返回了错误（HTTP \(code)），请稍后重试。"
         case .format: return "无法读取接口返回的内容；可在平台网页中打开。"
@@ -498,12 +628,15 @@ final class GIAPI: GIIssueService, @unchecked Sendable {
             URLQueryItem(name: "state", value: "all"), URLQueryItem(name: "sort", value: "updated"), URLQueryItem(name: "direction", value: "desc")
         ])
     }
-    func issue(_ route: GIIssueRoute) async throws -> GIIssue { try await get(issuePath(route)) }
+    func issue(_ route: GIIssueRoute) async throws -> GIIssue { try await get(try issuePath(route)) }
     func comments(_ route: GIIssueRoute, page: Int) async throws -> [GIComment] {
-        try await get(issuePath(route) + ["comments"], query: Self.page(page))
+        try await get(try issuePath(route) + ["comments"], query: Self.page(page))
     }
-    private func issuePath(_ route: GIIssueRoute) -> [String] {
-        ["repos"] + route.repository.split(separator: "/").map(String.init) + ["issues", route.number]
+    private func issuePath(_ route: GIIssueRoute) throws -> [String] {
+        guard (route.remote ?? .gitee) == .gitee, route.repository.split(separator: "/").count == 2,
+              route.repository.split(separator: "/").allSatisfy({ GIRepositoryAddress.validSlug(String($0)) }),
+              !route.number.isEmpty, route.number.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { throw GIServiceError.format }
+        return ["repos"] + route.repository.split(separator: "/").map(String.init) + ["issues", route.number]
     }
     static func page(_ number: Int) -> [URLQueryItem] {
         [URLQueryItem(name: "page", value: String(max(1, number))), URLQueryItem(name: "per_page", value: "50")]

@@ -50,7 +50,7 @@ struct DynamicNotchApp: App {
             Button("Settings") {
                 SettingsWindowController.shared.showWindow()
             }
-            Button("Gitee / GitLab Issues…") { GIReaderWindowController.shared.show() }
+            Button("Git 仓库 Issues…") { GIReaderWindowController.shared.show() }
             Menu("菜单栏") { ThawMenuItems() }
             CheckForUpdatesView(updater: updaterController.updater)
             Divider()
