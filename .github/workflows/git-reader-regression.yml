@@ -11,6 +11,7 @@ on:
       - 'tests/*Reader*'
       - 'tests/*Git*'
       - 'tests/test_gitee*'
+      - 'tests/test_git_reader_scripts.py'
       - 'scripts/test_git_reader*'
       - '.github/workflows/git-reader-regression.yml'
 permissions:

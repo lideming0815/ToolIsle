@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Fail fast on both harnesses before spending time compiling the application.
+python3 -m unittest tests.test_git_reader_scripts
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 D=DynamicIsland/ToolIsleFeatures/Gitee
