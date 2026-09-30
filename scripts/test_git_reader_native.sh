@@ -15,7 +15,9 @@ if [[ ! -f "$PRODUCTS/Defaults.o" ]]; then
 fi
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT
 # Use the exact Defaults module/object built for the application, not a stand-in implementation.
-swiftc -I "$PRODUCTS" -F "$PRODUCTS" \
+# Xcode instruments Defaults.o for coverage; link the same profiling runtime
+# in this standalone executable instead of disabling coverage in the app build.
+swiftc -profile-generate -profile-coverage-mapping -I "$PRODUCTS" -F "$PRODUCTS" \
   "$D/GICore.swift" "$D/GIListPresentation.swift" "$D/GLAPI.swift" "$D/GHAPI.swift" "$D/GIStore.swift" \
   tests/GitLabStoreRegression.swift "$PRODUCTS/Defaults.o" -o "$OUT/store-regression"
-"$OUT/store-regression"
+LLVM_PROFILE_FILE="$OUT/store-regression.profraw" "$OUT/store-regression"
