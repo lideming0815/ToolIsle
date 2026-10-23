@@ -54,6 +54,8 @@ struct DynamicNotchApp: App {
             Button("Git 仓库 Issues…") { GIReaderWindowController.shared.show() }
             Button("AI 咒语…") { AISpellPanelController.shared.show() }
                 .disabled(!enableAISpells)
+            Button("管理 AI 咒语…") { AISpellPanelController.shared.showManager() }
+                .disabled(!enableAISpells)
             Menu("菜单栏") { ThawMenuItems() }
             CheckForUpdatesView(updater: updaterController.updater)
             Divider()
@@ -705,6 +707,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !AppRuntimeEnvironment.isUITesting {
+            AISpellPanelController.shared.startTrackingApplications()
             ThawController.shared.startIfEnabled()
         }
         // Explicit fixture-only preview. No behavior changes during ordinary launches.

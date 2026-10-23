@@ -2,7 +2,7 @@ name: AI spells validation and BangsBuddy package
 
 on:
   push:
-    branches: [dev, "feat/ai-spells-manager"]
+    branches: [dev, "feat/ai-spells-manager", "fix/ai-spells-quick-paste"]
     paths:
       - 'DynamicIsland/ToolIsleFeatures/AISpells/**'
       - 'DynamicIsland/DynamicIslandApp.swift'
@@ -10,13 +10,21 @@ on:
       - 'DynamicIsland/components/Settings/SettingsView.swift'
       - 'DynamicIsland/models/Constants.swift'
       - 'tests/AISpellLibraryRegression.swift'
+      - 'tests/AISpellInsertionRegression.swift'
+      - 'tests/AISpellQuickViewRegression.swift'
       - 'scripts/test_ai_spells.sh'
+      - 'scripts/test_ai_spell_insertion.sh'
+      - 'scripts/test_ai_spell_interaction.sh'
       - '.github/workflows/ai-spells-validation.yml'
   pull_request:
     paths:
       - 'DynamicIsland/ToolIsleFeatures/AISpells/**'
       - 'tests/AISpellLibraryRegression.swift'
+      - 'tests/AISpellInsertionRegression.swift'
+      - 'tests/AISpellQuickViewRegression.swift'
       - 'scripts/test_ai_spells.sh'
+      - 'scripts/test_ai_spell_insertion.sh'
+      - 'scripts/test_ai_spell_interaction.sh'
       - '.github/workflows/ai-spells-validation.yml'
   workflow_dispatch:
 
@@ -42,12 +50,23 @@ jobs:
           xcode-version: latest-stable
       - name: Run isolated spell library and Store regressions
         run: bash scripts/test_ai_spells.sh
+      - name: Run spell insertion contract regressions
+        run: bash scripts/test_ai_spell_insertion.sh
       - name: Prepare native toolchain
         run: |
           sudo xcodebuild -runFirstLaunch
           sudo xcodebuild -downloadComponent MetalToolchain
+      - name: Run native quick-view interaction regressions
+        run: bash scripts/test_ai_spell_interaction.sh "$RUNNER_TEMP/ai-spells-interaction"
       - name: Build complete BangsBuddy DMG with existing release recipe
         run: bash publish/publish.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AI-Spells-Quick-View
+          path: ${{ runner.temp }}/ai-spells-interaction/ai-spells-quick-panel.png
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()
         with:
