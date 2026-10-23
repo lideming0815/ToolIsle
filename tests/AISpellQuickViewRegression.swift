@@ -216,6 +216,7 @@ struct AISpellQuickViewRegression {
         window.contentView = hosting
         window.setContentSize(NSSize(width: 820, height: 560))
         window.center()
+        NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil) }
         pumpEvents(for: 0.6)
@@ -241,7 +242,14 @@ struct AISpellQuickViewRegression {
         try expect(tryRead(store.fileURL) == originalData, "Cancel leaves the original library bytes unchanged")
 
         try expect(state.requestCapture(duplicate.content), "An exact duplicate can be routed to its existing entry")
+        // The real capture controller activates the app and presents its manager
+        // on every request. A bare state request after closing a sheet leaves the
+        // headless fixture with no key window, so AppKit cannot dispatch Return.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
         pumpEvents(for: 0.3)
+        try expect(NSApp.keyWindow === window,
+                   "The capture presenter makes the management window key before keyboard interaction")
         try expect(window.attachedSheet == nil && store.spells.count == originalCount,
                    "An exact duplicate reveals the existing spell without opening a new draft")
         try expect(tryRead(store.fileURL) == originalData, "Duplicate capture does not rewrite the library")
@@ -271,6 +279,10 @@ struct AISpellQuickViewRegression {
         pumpEvents(for: 0.6)
         let currentSheet = try editorSheet(of: window)
         let currentBody = try bodyEditor(in: currentSheet)
+        NSApp.activate(ignoringOtherApps: true)
+        currentSheet.makeKeyAndOrderFront(nil)
+        pumpEvents(for: 0.1)
+        try expect(NSApp.keyWindow === currentSheet, "The active draft sheet owns keyboard focus before editing")
         try expect(currentSheet.makeFirstResponder(currentBody), "The real draft body can receive editing")
         currentBody.insertText(editedDraft, replacementRange: NSRange(location: 0, length: currentBody.string.utf16.count))
         pumpEvents(for: 0.2)
