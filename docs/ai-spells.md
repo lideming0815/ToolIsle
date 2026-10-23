@@ -41,19 +41,21 @@ macOS 上同时编译并测试实际 `AISpellStore`；Linux 运行 Foundation �
 bash publish/publish.sh
 ```
 
-`.github/workflows/ai-spells-validation.yml` 在 macOS 执行回归并调用这个打包脚本，保留 DMG、构建日志和源提交记录。完整包沿用现有 BangsBuddy 身份与 Thaw 集成，不改签名、辅助组件或更新机制。
+`.github/workflows/ai-spells-validation.yml` 在 macOS 执行回归并调用这个打包脚本，保留 DMG、构建日志和源提交记录。PR 构建检出该 PR 的实际源提交，便于将 `package.json.source_commit` 与分支代码对应。完整包沿用现有 BangsBuddy 身份与 Thaw 集成，不改签名、辅助组件或更新机制。
 
-### 本次验证记录（2026-10-23）
+### 开发与首轮 CI 验证记录（2026-10-23）
 
-当前开发环境为 Linux；使用 Swift 6.0.3 实际编译、执行 Foundation 核心回归。结果如下：
+开发阶段在 Linux 使用 Swift 6.0.3 实际编译、执行 Foundation 核心回归；发布功能分支后，在 macOS CI 运行实际 Store 回归。结果如下：
 
 | 检查 | 结果 |
 | --- | --- |
 | 新增咒语库回归 | 36 项断言通过，覆盖持久化、原文保留、搜索、收藏、导入合并和损坏文件保护 |
+| macOS 咒语库与 Store 回归 | 首轮 CI 的 46 项断言通过（源提交 `5545dec`），包括 macOS 专用的 Store 回归 |
 | 新增及修改的 Swift 文件语法解析 | 通过；不等同于 AppKit / SwiftUI 原生类型检查 |
 | 仓库现有 Python 测试集 | 33 项中 32 项通过，1 项已有失败，0 项执行错误 |
 | 脚本语法和改动空白检查 | 通过 |
-| macOS Store 回归、Xcode 完整构建、DMG 和实机交互 | 尚未执行，交由 macOS 验证流程及下方实机清单验收 |
+| Xcode 完整构建与 DMG | 由 [PR #12 的 macOS 工作流](https://github.com/lideming0815/ToolIsle/pull/12/checks) 持续验证，最新结果及产物以对应提交的运行记录为准 |
+| 实机交互 | 需按下方清单验收，自动构建不替代焦点、权限及输入法实测 |
 
 已有失败是 `test_notch_display_selection.NotchDisplaySelectionTests.test_app_identity_and_upstream_protocols_preserved`：测试仍断言 `startingUpdater: !AppRuntimeEnvironment.isUITesting`，基线应用实际已使用 `startingUpdater: false`。在未修改的基线 `6d84a53ec946a53d9fca8c50805d5bfb282d03aa` 单独重跑，确认同样失败。本次功能未修改更新器行为，也未调整该测试。
 

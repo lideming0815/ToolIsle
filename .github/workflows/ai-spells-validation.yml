@@ -34,6 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           lfs: true
           persist-credentials: false
       - uses: maxim-lobanov/setup-xcode@v1
