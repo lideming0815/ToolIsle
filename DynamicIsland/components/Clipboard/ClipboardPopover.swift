@@ -204,41 +204,50 @@ struct ClipboardPopoverItemRow: View {
     let isPinned: Bool
     let onHover: (UUID?) -> Void
     @ObservedObject var clipboardManager = ClipboardManager.shared
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Type icon
-            Image(systemName: item.type.icon)
-                .font(.system(size: 12))
-                .foregroundColor(.blue)
-                .frame(width: 16)
+            HStack(alignment: .top, spacing: 10) {
+                // Type icon
+                Image(systemName: item.type.icon)
+                    .font(.system(size: 12))
+                    .foregroundColor(.blue)
+                    .frame(width: 16)
             
-            // Content
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.preview)
-                    .font(.system(size: 11))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                // Content
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.preview)
+                        .font(.system(size: 11))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 
-                HStack {
-                    Text(item.type.displayName)
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                    HStack {
+                        Text(item.type.displayName)
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
                     
-                    Spacer()
+                        Spacer()
                     
-                    Text(timeAgoString(from: item.timestamp))
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
+                        Text(timeAgoString(from: item.timestamp))
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
+            
+                Spacer()
             }
-            
-            Spacer()
-            
+            .contentShape(Rectangle())
+            .onTapGesture {
+                clipboardManager.copyToClipboard(item)
+            }
+
             // Action buttons (shown on hover)
             if isHovered {
                 HStack(spacing: 4) {
+                    AISpellClipboardCaptureButton(item: item, beforeCapture: { dismiss() })
+
                     // Pin/Unpin button
                     Button(action: {
                         if isPinned {
@@ -289,9 +298,6 @@ struct ClipboardPopoverItemRow: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 onHover(hovering ? item.id : nil)
             }
-        }
-        .onTapGesture {
-            clipboardManager.copyToClipboard(item)
         }
     }
     

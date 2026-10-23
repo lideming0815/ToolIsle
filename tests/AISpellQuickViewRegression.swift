@@ -35,7 +35,7 @@ struct AISpellQuickViewRegression {
     static func main() {
         do {
             try run()
-            print("PASS: \(assertions) native AI spell quick-view interaction assertions; external-app paste not tested")
+            print("PASS: \(assertions) native AI spell quick-view and management interaction assertions; external-app paste not tested")
         } catch {
             FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
             exit(1)
@@ -176,16 +176,305 @@ struct AISpellQuickViewRegression {
         try expect(recorder.manageCount == 1, "Manage opens the management flow once")
         try expect(recorder.pasted.count == 2, "Opening management does not insert a spell")
 
+        panel.orderOut(nil)
+        let combination = try runManagement(store: store, prompt: first, duplicate: second)
+        panel.makeKeyAndOrderFront(nil)
+        pumpEvents(for: 0.2)
+        try enterQuery(combination.title, in: search, window: panel)
+        let previousPastes = recorder.pasted.count
+        clickFirstPrompt(in: hosting, window: panel)
+        pumpEvents(for: 0.2)
+        try expect(recorder.pasted.count == previousPastes + 1 && recorder.pasted.last?.id == combination.id,
+                   "One click on a saved combination requests insertion exactly once")
+        try expect(recorder.pasted.last?.content == combination.content,
+                   "Clicking a combination passes its complete ordered body to insertion")
+        try expect(panel.makeFirstResponder(search), "Combination search can regain focus")
+        pumpEvents(for: 0.1)
+        postKey(.keyDown, code: 36, characters: "\r", modifiers: [], window: panel)
+        postKey(.keyUp, code: 36, characters: "\r", modifiers: [], window: panel)
+        pumpEvents(for: 0.2)
+        try expect(recorder.pasted.count == previousPastes + 2 && recorder.pasted.last?.id == combination.id,
+                   "Return on a saved combination requests insertion exactly once")
+        try expect(recorder.pasted.last?.content == combination.content && recorder.copied.count == 1,
+                   "Combination Return inserts the full body without also requesting copy-only")
     }
 
-    private static func findSearchField(in view: NSView) -> NSSearchField? {
-        if let field = view as? NSSearchField, field.accessibilityIdentifier() == "ai-spell-quick-search" {
+    private static func runManagement(store: AISpellStore, prompt: AISpell, duplicate: AISpell) throws -> AISpell {
+        let state = AISpellManagerState()
+        let recorder = Recorder()
+        let hosting = NSHostingView(rootView: AISpellsView(
+            store: store, state: state,
+            onCopy: { recorder.copied.append($0) }, onPaste: { recorder.pasted.append($0) },
+            onClose: { recorder.closeCount += 1 }
+        ))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 560),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false
+        )
+        window.title = "AI 咒语 · 管理"
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setContentSize(NSSize(width: 820, height: 560))
+        window.center()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        pumpEvents(for: 0.6)
+        try snapshotIfRequested(hosting, name: "ai-spells-manager.png")
+
+        let originalData = try Data(contentsOf: store.fileURL)
+        let originalCount = store.spells.count
+        let captured = "  收藏：检查遗漏🙂\n保留第二行与空格。  \n"
+        try expect(state.requestCapture(captured), "A nonempty clipboard snapshot is accepted")
+        pumpEvents(for: 0.6)
+        let captureSheet = try editorSheet(of: window)
+        let captureBody = try bodyEditor(in: captureSheet)
+        try expect(captureBody.string.utf8.elementsEqual(captured.utf8),
+                   "Capture prefills the production editor with the exact multiline Unicode body")
+        try expect(nativeTextValues(in: captureSheet.contentView!).contains(AISpellLibrary.suggestedTitle(for: captured)),
+                   "Capture prefills a useful title from the first nonempty line")
+        try expect(store.spells.count == originalCount, "Opening capture does not save a spell")
+        try expect(tryRead(store.fileURL) == originalData, "Opening capture leaves the library bytes unchanged")
+        clickEditorFooter(in: captureSheet, save: false)
+        pumpEvents(for: 0.6)
+        try expect(window.attachedSheet == nil && store.spells.count == originalCount,
+                   "Cancel closes capture without adding a spell")
+        try expect(tryRead(store.fileURL) == originalData, "Cancel leaves the original library bytes unchanged")
+
+        try expect(state.requestCapture(duplicate.content), "An exact duplicate can be routed to its existing entry")
+        // The real capture controller activates the app and presents its manager
+        // on every request. A bare state request after closing a sheet leaves the
+        // headless fixture with no key window, so AppKit cannot dispatch Return.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        pumpEvents(for: 0.3)
+        try expect(NSApp.keyWindow === window,
+                   "The capture presenter makes the management window key before keyboard interaction")
+        try expect(window.attachedSheet == nil && store.spells.count == originalCount,
+                   "An exact duplicate reveals the existing spell without opening a new draft")
+        try expect(tryRead(store.fileURL) == originalData, "Duplicate capture does not rewrite the library")
+        guard let search = findSearchField(in: hosting, identifier: "ai-spells-search") else {
+            throw Failure(description: "The production management search field was not found")
+        }
+        try expect(window.makeFirstResponder(search), "Management search can become first responder")
+        pumpEvents(for: 0.1)
+        let duplicateFocusBefore = focusDescription(search: search, window: window)
+        try snapshotIfRequested(hosting, name: "ai-spells-duplicate-before.png")
+        postKey(.keyDown, code: 36, characters: "\r", modifiers: [], window: window)
+        postKey(.keyUp, code: 36, characters: "\r", modifiers: [], window: window)
+        pumpEvents(for: 0.2)
+        try snapshotIfRequested(hosting, name: "ai-spells-duplicate.png")
+        let duplicateDiagnostics = "expected=\(duplicate.id.uuidString); " +
+            "copied(\(recorder.copied.count))=\(recorder.copied.map { $0.id.uuidString }); " +
+            "pasted(\(recorder.pasted.count))=\(recorder.pasted.map { $0.id.uuidString }); " +
+            "before={\(duplicateFocusBefore)}; after={\(focusDescription(search: search, window: window))}"
+        print("Duplicate capture Enter: \(duplicateDiagnostics)")
+        try expect(recorder.copied.map(\.id) == [duplicate.id],
+                   "Duplicate capture selects the existing entry, verified through its public copy action. " + duplicateDiagnostics)
+
+        let initialDraft = "正在编辑的草稿\n这段内容尚未保存。"
+        let editedDraft = "用户已经修改的草稿🙂\n新捕获不能覆盖这里。"
+        let queuedCapture = "排队收藏的提示词\n请先列出当前问题中的未知条件。\n"
+        try expect(state.requestCapture(initialDraft), "Start a new capture draft")
+        pumpEvents(for: 0.6)
+        let currentSheet = try editorSheet(of: window)
+        let currentBody = try bodyEditor(in: currentSheet)
+        NSApp.activate(ignoringOtherApps: true)
+        currentSheet.makeKeyAndOrderFront(nil)
+        pumpEvents(for: 0.1)
+        try expect(NSApp.keyWindow === currentSheet, "The active draft sheet owns keyboard focus before editing")
+        try expect(currentSheet.makeFirstResponder(currentBody), "The real draft body can receive editing")
+        currentBody.insertText(editedDraft, replacementRange: NSRange(location: 0, length: currentBody.string.utf16.count))
+        pumpEvents(for: 0.2)
+        try expect(state.requestCapture(queuedCapture), "One additional capture can wait behind an open editor")
+        pumpEvents(for: 0.2)
+        try expect(window.attachedSheet === currentSheet && currentBody.string == editedDraft,
+                   "A new capture never replaces the already-open, user-edited draft")
+        try expect(state.captureRequest?.content == queuedCapture,
+                   "The second capture retains its own text while waiting")
+        try expect(!state.requestCapture("不能挤掉前一个待收藏内容"), "A full pending slot rejects another capture")
+        try expect(state.captureRequest?.content == queuedCapture && currentBody.string == editedDraft,
+                   "Rejecting a third request preserves both the editor and the pending snapshot")
+        try expect(tryRead(store.fileURL) == originalData, "Editing and queueing have not saved either draft")
+        clickEditorFooter(in: currentSheet, save: false)
+        pumpEvents(for: 0.8)
+        let queuedSheet = try editorSheet(of: window)
+        let queuedBody = try bodyEditor(in: queuedSheet)
+        try expect(queuedBody.string == queuedCapture,
+                   "Closing the current editor presents the waiting capture intact")
+        try expect(store.spells.count == originalCount && tryRead(store.fileURL) == originalData,
+                   "Presenting the waiting capture still requires explicit Save")
+        clickEditorFooter(in: queuedSheet, save: true)
+        pumpEvents(for: 0.6)
+        try expect(window.attachedSheet == nil && store.spells.count == originalCount + 1,
+                   "One native Save click adds the captured spell exactly once and dismisses the editor")
+        try expect(store.matchingContent(queuedCapture)?.title == AISpellLibrary.suggestedTitle(for: queuedCapture),
+                   "Confirmed capture saves the displayed title and complete body")
+        try expect(store.matchingContent(captured) == nil && store.matchingContent(editedDraft) == nil,
+                   "Previously cancelled capture bodies were never saved")
+        try expect(recorder.pasted.isEmpty && recorder.copied.count == 1,
+                   "Opening, editing, cancelling, and saving capture never insert or copy a prompt")
+
+        window.orderOut(nil)
+        let combination = try runCombinationEditor(store: store, prompt: prompt)
+        window.makeKeyAndOrderFront(nil)
+        // Use the same duplicate-reveal route to display the newly saved combination.
+        _ = state.requestCapture(combination.content)
+        pumpEvents(for: 0.3)
+        try snapshotIfRequested(hosting, name: "ai-spells-manager.png")
+        return combination
+    }
+
+    private static func runCombinationEditor(store: AISpellStore, prompt: AISpell) throws -> AISpell {
+        let context = AISpell(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!,
+            title: "热线分析项目背景", content: "项目：陕西热线分析。\n技术栈：Java 8、StarRocks。",
+            category: "项目背景", kind: .context
+        )
+        try expect(store.save(context), "Create an isolated project context card")
+        let draft = AISpell(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000005")!,
+            title: "热线分析 · 完整提问", content: "", category: "预设组合", kind: .combination,
+            components: [AISpellComponent(spell: context), AISpellComponent(spell: prompt)]
+        )
+        var saved: [AISpell] = []
+        var saveSucceeded = false
+        // Host the production editor directly with two chosen components. Keeping
+        // it visible after Save lets both direction buttons exercise real state.
+        let hosting = NSHostingView(rootView: AISpellEditor(spell: draft, store: store, onCancel: {}) { value in
+            saved.append(value)
+            saveSucceeded = store.save(value)
+        })
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 620),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.title = "AI 咒语 · 预设组合"
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.setContentSize(NSSize(width: 760, height: 620))
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        pumpEvents(for: 0.5)
+        try snapshotIfRequested(hosting, name: "ai-spells-combination.png")
+        try expect(!store.spells.contains { $0.id == draft.id }, "Opening a combination editor does not persist its draft")
+
+        // The native 760 x 620 snapshot places the first down arrow at (701, 163)
+        // and the second up arrow at (680, 232), measured from the content's top left.
+        // Saved component order/body, not the coordinates, are the oracle.
+        clickFromTop(x: 701, y: 163, in: hosting, window: window) // context down
+        pumpEvents(for: 0.2)
+        clickEditorFooter(in: window, save: true)
+        pumpEvents(for: 0.2)
+        try expect(saveSucceeded && saved.count == 1, "One real Save click saves the combination once")
+        try expect(saved.last?.components.map(\.sourceID) == [prompt.id, context.id],
+                   "The down arrow changes the saved component order")
+        try expect(saved.last?.content == prompt.content + "\n\n" + context.content,
+                   "Combination Save passes the complete reordered bodies, separated by two newlines")
+
+        clickFromTop(x: 680, y: 232, in: hosting, window: window) // context up from second row
+        pumpEvents(for: 0.2)
+        clickEditorFooter(in: window, save: true)
+        pumpEvents(for: 0.2)
+        try expect(saveSucceeded && saved.count == 2, "A second explicit Save produces one additional save callback")
+        guard let combination = store.spells.first(where: { $0.id == draft.id }) else {
+            throw Failure(description: "The combination was not persisted through the production Save action")
+        }
+        try expect(combination.components.map(\.sourceID) == [context.id, prompt.id],
+                   "The up arrow puts the project context before the prompt")
+        try expect(combination.content == context.content + "\n\n" + prompt.content,
+                   "The persisted combination contains exactly the displayed ordered body")
+        try snapshotIfRequested(hosting, name: "ai-spells-combination.png")
+        return combination
+    }
+
+    private static func findSearchField(in view: NSView, identifier: String = "ai-spell-quick-search") -> NSSearchField? {
+        if let field = view as? NSSearchField, field.accessibilityIdentifier() == identifier {
             return field
         }
         for child in view.subviews {
-            if let found = findSearchField(in: child) { return found }
+            if let found = findSearchField(in: child, identifier: identifier) { return found }
         }
         return nil
+    }
+
+    private static func enterQuery(_ query: String, in search: NSSearchField, window: NSWindow) throws {
+        try expect(window.makeFirstResponder(search), "The native search field can receive a query")
+        pumpEvents(for: 0.1)
+        guard let editor = search.currentEditor() as? NSTextView else {
+            throw Failure(description: "Search has no native field editor for typing")
+        }
+        editor.insertText(query, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        pumpEvents(for: 0.2)
+    }
+
+    private static func focusDescription(search: NSSearchField, window: NSWindow) -> String {
+        let editor = search.currentEditor() as? NSTextView
+        let responder = window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        let keyResponder = NSApp.keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        return "window=\(window.title)#\(window.windowNumber), " +
+            "keyWindow=\(NSApp.keyWindow?.title ?? "nil")#\(NSApp.keyWindow?.windowNumber ?? -1), " +
+            "firstResponder=\(responder), keyFirstResponder=\(keyResponder), " +
+            "searchEditor=\(editor.map { String(describing: type(of: $0)) } ?? "nil"), " +
+            "editorIsFirstResponder=\(editor != nil && window.firstResponder === editor), " +
+            "markedText=\(editor?.hasMarkedText() ?? false), " +
+            "query=\(String(reflecting: search.stringValue)), " +
+            "attachedSheet=\(window.attachedSheet != nil)"
+    }
+
+    private static func editorSheet(of window: NSWindow) throws -> NSWindow {
+        guard let sheet = window.attachedSheet, sheet.contentView != nil else {
+            throw Failure(description: "The manager did not present the production spell editor sheet")
+        }
+        return sheet
+    }
+
+    private static func bodyEditor(in window: NSWindow) throws -> NSTextView {
+        func find(in view: NSView) -> NSTextView? {
+            if let text = view as? NSTextView, !text.isFieldEditor, text.isEditable { return text }
+            for child in view.subviews {
+                if let found = find(in: child) { return found }
+            }
+            return nil
+        }
+        guard let root = window.contentView, let editor = find(in: root) else {
+            throw Failure(description: "The spell editor's real NSTextView body was not found")
+        }
+        return editor
+    }
+
+    private static func nativeTextValues(in view: NSView) -> [String] {
+        var values: [String] = []
+        if let text = view as? NSTextView { values.append(text.string) }
+        if let field = view as? NSTextField { values.append(field.stringValue) }
+        for child in view.subviews { values.append(contentsOf: nativeTextValues(in: child)) }
+        return values
+    }
+
+    private static func tryRead(_ url: URL) -> Data? { try? Data(contentsOf: url) }
+
+    private static func clickEditorFooter(in window: NSWindow, save: Bool) {
+        guard let root = window.contentView else { return }
+        // Both editor sizes use the same 22-point padding and trailing footer.
+        // These clicks go through NSApp; no SwiftUI callback is invoked by a test.
+        clickFromTop(x: root.bounds.width - (save ? 47 : 111), y: root.bounds.height - 33,
+                     in: root, window: window)
+    }
+
+    private static func clickFromTop(x: CGFloat, y: CGFloat, in root: NSView, window: NSWindow) {
+        let point = NSPoint(x: root.bounds.minX + x,
+                            y: root.isFlipped ? root.bounds.minY + y : root.bounds.maxY - y)
+        click(at: root.convert(point, to: nil), window: window)
+    }
+
+    private static func snapshotIfRequested(_ view: NSView, name: String) throws {
+        guard let option = CommandLine.arguments.firstIndex(of: "--snapshot"),
+              CommandLine.arguments.indices.contains(option + 1) else { return }
+        let url = URL(fileURLWithPath: CommandLine.arguments[option + 1])
+            .deletingLastPathComponent().appendingPathComponent(name)
+        try writeSnapshot(of: view, to: url)
+        print("Native interaction snapshot: \(url.path)")
     }
 
     private static func clickFirstPrompt(in root: NSView, window: NSWindow) {

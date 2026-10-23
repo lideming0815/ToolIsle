@@ -495,28 +495,31 @@ struct ClipboardPanelItemRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            leadingBadge
+            HStack(spacing: 10) {
+                leadingBadge
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.preview)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.preview)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                HStack(spacing: 5) {
-                    Text(item.type.displayName)
-                        .foregroundStyle(item.type.tint.opacity(0.95))
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                    Text(timeAgoString(from: item.timestamp))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 5) {
+                        Text(item.type.displayName)
+                            .foregroundStyle(item.type.tint.opacity(0.95))
+                        Text("·")
+                            .foregroundStyle(.tertiary)
+                        Text(timeAgoString(from: item.timestamp))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 10.5, weight: .medium))
                 }
-                .font(.system(size: 10.5, weight: .medium))
+                Spacer(minLength: 4)
             }
-
-            Spacer(minLength: 4)
+            .contentShape(Rectangle())
+            .onTapGesture { copy() }
 
             actions
         }
@@ -535,9 +538,6 @@ struct ClipboardPanelItemRow: View {
             withAnimation(.easeOut(duration: 0.16)) {
                 onHover(hovering ? item.id : nil)
             }
-        }
-        .onTapGesture {
-            copy()
         }
     }
 
@@ -569,6 +569,9 @@ struct ClipboardPanelItemRow: View {
         // Reserved width: the buttons fade in rather than appearing and
         // shoving the text sideways on every hover.
         HStack(spacing: 2) {
+            AISpellClipboardCaptureButton(item: item)
+                .opacity(isHovered ? 1 : 0)
+
             ClipboardRowActionButton(
                 icon: isPinned ? "pin.fill" : "pin",
                 tint: isPinned ? Color.accentColor : nil,
@@ -602,7 +605,7 @@ struct ClipboardPanelItemRow: View {
             }
             .opacity(isHovered ? 1 : 0)
         }
-        .frame(width: 78, alignment: .trailing)
+        .frame(width: AISpellClipboardCapture.text(from: item) == nil ? 78 : 102, alignment: .trailing)
     }
 
     private func copy() {

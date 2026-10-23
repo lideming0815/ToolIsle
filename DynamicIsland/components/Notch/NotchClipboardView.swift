@@ -62,7 +62,9 @@ struct NotchClipboardView: View {
                                 item: item,
                                 isHovered: hoveredItemId == item.id,
                                 justCopied: justCopiedId == item.id,
-                                onDelete: { clipboardManager.deleteItem(item) }
+                                onDelete: { clipboardManager.deleteItem(item) },
+                                onCopy: { copy(item) },
+                                onCapture: { vm.close() }
                             )
                             .contentShape(Rectangle())
                             .clipboardDraggable(item)
@@ -73,11 +75,8 @@ struct NotchClipboardView: View {
                                 if hovering { hoveredItemId = item.id }
                                 else if hoveredItemId == item.id { hoveredItemId = nil }
                             }
-                            .onTapGesture { copy(item) }
-                            .accessibilityElement(children: .combine)
+                            .accessibilityElement(children: .contain)
                             .accessibilityLabel("\(item.type.displayName): \(item.preview)")
-                            .accessibilityAddTraits(.isButton)
-                            .accessibilityAction { copy(item) }
                             .accessibilityAction(named: Text("Delete")) { clipboardManager.deleteItem(item) }
                         }
                     }
@@ -174,6 +173,8 @@ struct ClipboardGridCard: View {
     let isHovered: Bool
     let justCopied: Bool
     let onDelete: () -> Void
+    let onCopy: () -> Void
+    let onCapture: () -> Void
 
     // Decode the image once per item instead of on every render. `body` re-runs for hover
     // and copy-feedback changes, and decoding the on-disk PNG on the main thread each time
@@ -203,6 +204,12 @@ struct ClipboardGridCard: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onCopy)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("复制 \(item.type.displayName): \(item.preview)")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onCopy() }
         .background(
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color.white.opacity(isHovered ? 0.12 : 0.08))
@@ -214,13 +221,16 @@ struct ClipboardGridCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .topTrailing) {
             if isHovered {
-                Button(action: onDelete) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white, .black.opacity(0.5))
+                HStack(spacing: 2) {
+                    AISpellClipboardCaptureButton(item: item, beforeCapture: onCapture)
+                    Button(action: onDelete) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white, .black.opacity(0.5))
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Delete this item")
                 }
-                .buttonStyle(PlainButtonStyle())
-                .help("Delete this item")
                 .padding(4)
                 .transition(.scale.combined(with: .opacity))
             }

@@ -20,6 +20,7 @@ swiftc -target "$(uname -m)-apple-macosx14.6" \
   DynamicIsland/ToolIsleFeatures/AISpells/AISpellLibrary.swift \
   DynamicIsland/ToolIsleFeatures/AISpells/AISpellStore.swift \
   DynamicIsland/ToolIsleFeatures/AISpells/AISpellsView.swift \
+  DynamicIsland/ToolIsleFeatures/AISpells/AISpellEditor.swift \
   DynamicIsland/ToolIsleFeatures/AISpells/AISpellQuickView.swift \
   tests/AISpellQuickViewRegression.swift \
   -framework AppKit -framework SwiftUI \

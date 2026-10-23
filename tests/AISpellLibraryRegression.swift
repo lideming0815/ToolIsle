@@ -146,6 +146,10 @@ struct AISpellLibraryRegression {
         let afterFailure = try AISpellLibrary(fileURL: writeFile)
         expect(afterFailure.spells.first?.title == "不能丢失", "The last successfully saved library remains readable")
 
+        try verifyLegacyMigration(in: directory)
+        try verifyClipboardCapture(in: directory)
+        try verifyCombinationSnapshots(in: directory)
+
         #if os(macOS)
         // This compiles the actual observable Store on macOS without linking the whole
         // application. It never opens the user's Application Support file or defaults.
@@ -159,6 +163,17 @@ struct AISpellLibraryRegression {
         expect(store.importData(Data("not a backup".utf8)) == nil, "The Store reports an invalid import")
         expect(store.spells == storeSnapshot && store.errorMessage != nil,
                "Failed Store imports preserve the visible saved state and explain the error")
+        expect(store.matchingContent("已保存")?.title == "Store 内容",
+               "Capture duplicate hints work through the observable Store")
+        let storeContext = AISpell(title: "Store 背景", content: "当前项目背景", kind: .context)
+        expect(store.save(storeContext), "The Store saves a context card")
+        let storeCombination = AISpell(title: "Store 组合", content: "", kind: .combination,
+                                       components: [AISpellComponent(spell: storeContext),
+                                                    AISpellComponent(spell: storeSnapshot[0])])
+        expect(store.save(storeCombination), "The Store saves a combination through the same public interface")
+        store.reload()
+        expect(store.spells.first { $0.id == storeCombination.id }?.content == "当前项目背景\n\n已保存",
+               "Store reload publishes the generated insertion text")
 
         let blockedFile = directory.appendingPathComponent("blocked-store.json")
         let originalBytes = Data("do not replace me".utf8)
@@ -176,8 +191,191 @@ struct AISpellLibraryRegression {
         expect(!blockedStore.isReadOnly && blockedStore.errorMessage == nil,
                "Reload can recover after the original file has been repaired")
         expect(blockedStore.spells.first?.content == "已保存", "Recovery publishes the repaired library")
+
+        let changingImportFile = directory.appendingPathComponent("changing-import-store.json")
+        try Data(#"{"schemaVersion":1,"spells":[]}"#.utf8).write(to: changingImportFile)
+        let changingImportStore = AISpellStore(fileURL: changingImportFile)
+        expect(!changingImportStore.isReadOnly && changingImportStore.spells.isEmpty,
+               "Import migration fixture opens an empty legacy library")
+        let externallyChanged = Data(#"{"schemaVersion":1,"spells":[{"id":"B1FD4DAB-25BF-4617-9BFE-7864156BDE31","title":"外部修改","content":"不能覆盖的新内容","category":"项目","isFavorite":false,"createdAt":1700000000000,"updatedAt":1700000001000}]}"#.utf8)
+        try externallyChanged.write(to: changingImportFile)
+        expect(changingImportStore.importData(recoveryData) == nil,
+               "Import refuses to migrate a legacy library changed since loading")
+        expect(changingImportStore.isReadOnly && changingImportStore.errorMessage != nil,
+               "An import migration conflict becomes read-only and offers the existing reload recovery")
+        expect(changingImportStore.spells.isEmpty, "A conflicted import does not publish unsaved additions")
+        expect(!changingImportStore.save(AISpell(title: "不能覆盖", content: "过时状态不能写入")),
+               "An import conflict blocks subsequent saves until reload")
+        let preservedImportFile = try Data(contentsOf: changingImportFile)
+        expect(preservedImportFile == externallyChanged, "Import conflict leaves the newer external bytes untouched")
+        changingImportStore.reload()
+        expect(!changingImportStore.isReadOnly && changingImportStore.errorMessage == nil,
+               "Reload clears the migration conflict after reading the newer valid file")
+        expect(changingImportStore.spells.first?.content == "不能覆盖的新内容",
+               "Reload publishes the external edit rather than discarded import additions")
         #endif
 
         print("PASS: \(assertions) AI spell library assertions")
+    }
+
+    private static func verifyLegacyMigration(in directory: URL) throws {
+        let migrationDirectory = directory.appendingPathComponent("legacy", isDirectory: true)
+        try FileManager.default.createDirectory(at: migrationDirectory, withIntermediateDirectories: true)
+        let file = migrationDirectory.appendingPathComponent("library.json")
+        // A literal document produced by the previous schema, without new optional fields.
+        let original = Data(#"{"schemaVersion":1,"spells":[{"id":"C9AD3029-C360-41F9-9B80-A29E07F636BD","title":"既有咒语","content":"  旧正文\n保持换行。\n","category":"项目","isFavorite":true,"createdAt":1700000000000,"updatedAt":1700000001000}]}"#.utf8)
+        try original.write(to: file)
+        let library = try AISpellLibrary(fileURL: file)
+        let afterOpening = try Data(contentsOf: file)
+        expect(afterOpening == original, "Opening a legacy library must not rewrite it")
+        let legacy = library.spells[0]
+        expect(legacy.kind == .prompt && legacy.components.isEmpty, "Legacy records become ordinary prompts")
+        expect(legacy.content == "  旧正文\n保持换行。\n", "Legacy body and whitespace stay unchanged")
+        let context = AISpell(title: "项目背景", content: "Java 8\nSpring Boot", kind: .context)
+        try library.save(context)
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
+        expect(saved["schemaVersion"] as? Int == 2, "The first mutation writes the new document version")
+        let entries = try FileManager.default.contentsOfDirectory(at: migrationDirectory, includingPropertiesForKeys: nil)
+        // Directory enumeration may use a base URL while appendingPathComponent
+        // constructs an absolute URL. Compare filenames, not URL representation.
+        let backups = entries.filter {
+            $0.lastPathComponent.hasPrefix("library-schema1-") && $0.pathExtension == "json"
+        }
+        expect(backups.count == 1,
+               "The first legacy mutation creates one migration backup; files: \(entries.map(\.lastPathComponent).sorted())")
+        let backupBytes = try Data(contentsOf: backups[0])
+        expect(backupBytes == original, "The migration backup contains the exact old bytes")
+        try library.toggleFavorite(id: context.id)
+        let afterSecondSave = try FileManager.default.contentsOfDirectory(at: migrationDirectory, includingPropertiesForKeys: nil)
+        expect(afterSecondSave.count == 2, "Ordinary later saves do not create more migration backups")
+        let reopened = try AISpellLibrary(fileURL: file)
+        expect(reopened.spells.first(where: { $0.id == legacy.id }) == legacy, "Migration preserves all existing record fields")
+        expect(reopened.spells.first(where: { $0.id == context.id })?.kind == .context, "Context type survives reopening")
+
+        let changedFile = migrationDirectory.appendingPathComponent("externally-edited.json")
+        try original.write(to: changedFile)
+        let staleLibrary = try AISpellLibrary(fileURL: changedFile)
+        let externallyEdited = Data(#"{"schemaVersion":1,"spells":[]}"#.utf8)
+        try externallyEdited.write(to: changedFile)
+        expectThrows("Migration must not overwrite a newer document written by another app") {
+            try staleLibrary.save(AISpell(title: "新咒语", content: "不能覆盖外部修改"))
+        }
+        let preservedExternalEdit = try Data(contentsOf: changedFile)
+        expect(preservedExternalEdit == externallyEdited, "Migration detects an external edit and leaves those bytes intact")
+    }
+
+    private static func verifyClipboardCapture(in directory: URL) throws {
+        let library = try AISpellLibrary(fileURL: directory.appendingPathComponent("capture/library.json"),
+                                        seedIfMissing: false)
+        let copied = "\n  标题第一行 🧩\n\n保留缩进和空行。\n"
+        expect(AISpellLibrary.suggestedTitle(for: copied) == "标题第一行 🧩",
+               "Capture suggests the first nonempty line without changing the body")
+        expect(AISpellLibrary.suggestedTitle(for: " \n\t ") == "新咒语",
+               "Blank capture uses a safe title suggestion")
+        let longTitle = String(repeating: "👩🏽‍💻", count: 45)
+        expect(AISpellLibrary.suggestedTitle(for: longTitle).count == 40,
+               "Title suggestions limit characters without splitting a Unicode grapheme")
+        let spell = AISpell(title: AISpellLibrary.suggestedTitle(for: copied), content: copied)
+        try library.save(spell)
+        expect(library.matchingContent(copied)?.id == spell.id, "Capture identifies an exact existing body")
+        expect(library.matchingContent(copied.trimmingCharacters(in: .whitespacesAndNewlines)) == nil,
+               "Duplicate matching does not silently trim or normalize prompt whitespace")
+        expect(library.matchingContent("unrelated") == nil, "Different content remains a new capture")
+        let reopened = try AISpellLibrary(fileURL: library.fileURL)
+        expect(reopened.matchingContent(copied)?.content == copied, "Captured content persists verbatim")
+    }
+
+    private static func verifyCombinationSnapshots(in directory: URL) throws {
+        let library = try AISpellLibrary(fileURL: directory.appendingPathComponent("combinations/library.json"),
+                                        seedIfMissing: false)
+        var context = AISpell(title: "热线项目", content: "背景：Java 8\n保持已确认口径。\n", kind: .context)
+        let prompt = AISpell(title: "检查遗漏", content: "  请检查最大的遗漏。\n")
+        try library.save(context)
+        try library.save(prompt)
+        var combination = AISpell(title: "热线技术评审", content: "此正文由片段生成",
+                                  category: "技术评审", kind: .combination,
+                                  components: [AISpellComponent(spell: context), AISpellComponent(spell: prompt)])
+        try library.save(combination)
+        combination = library.spells.first { $0.id == combination.id }!
+        let expectedOriginal = "背景：Java 8\n保持已确认口径。\n\n\n  请检查最大的遗漏。\n"
+        expect(combination.content == expectedOriginal,
+               "Combination text preserves each body and adds exactly two newlines between snapshots")
+        expect(library.results(query: "热线 遗漏").map(\.id) == [combination.id],
+               "Search includes the final combined body and the saved combination title")
+
+        context.content = "背景已更新：Java 17"
+        try library.save(context)
+        expect(library.spells.first { $0.id == combination.id }?.content == expectedOriginal,
+               "Editing a context does not silently change a saved combination")
+        try library.delete(id: context.id)
+        let reopened = try AISpellLibrary(fileURL: library.fileURL)
+        expect(reopened.spells.first { $0.id == combination.id }?.content == expectedOriginal,
+               "Deleting a source leaves a saved combination usable after reopening")
+        try reopened.toggleFavorite(id: combination.id)
+        let favorite = reopened.spells.first { $0.id == combination.id }!
+        expect(favorite.isFavorite && favorite.kind == .combination && favorite.components == combination.components,
+               "Favoriting preserves combination type, ordered snapshots, and original source identities")
+
+        combination = favorite
+        combination.components[0] = AISpellComponent(spell: context)
+        try reopened.save(combination)
+        let expectedRefreshed = "背景已更新：Java 17\n\n  请检查最大的遗漏。\n"
+        expect(reopened.spells.first { $0.id == combination.id }?.content == expectedRefreshed,
+               "Explicitly replacing a source snapshot updates the final saved text")
+        combination.components.reverse()
+        try reopened.save(combination)
+        let reordered = reopened.spells.first { $0.id == combination.id }!
+        expect(reordered.content == "  请检查最大的遗漏。\n\n\n背景已更新：Java 17",
+               "Changing component order changes insertion text in that order")
+
+        let target = try AISpellLibrary(fileURL: directory.appendingPathComponent("combined-import/library.json"),
+                                       seedIfMissing: false)
+        var conflictingPrompt = prompt
+        conflictingPrompt.content = "本机同 ID 的另一版正文"
+        try target.save(conflictingPrompt)
+        let imported = try target.importData(reopened.exportData())
+        expect(imported == 1, "Import keeps existing identities and adds the saved combination")
+        let importedCombination = target.spells.first { $0.id == reordered.id }!
+        expect(importedCombination.id == reordered.id && importedCombination.kind == .combination &&
+               importedCombination.title == reordered.title && importedCombination.category == reordered.category &&
+               importedCombination.isFavorite == reordered.isFavorite && importedCombination.content == reordered.content &&
+               importedCombination.components == reordered.components,
+               "Import and export preserve the combination even when source IDs are absent or differ locally")
+        expect(target.spells.first { $0.id == prompt.id }?.content == conflictingPrompt.content,
+               "Combination import does not replace local source content")
+        let reloadedTarget = try AISpellLibrary(fileURL: target.fileURL)
+        let restoredCombination = reloadedTarget.spells.first { $0.id == reordered.id }!
+        expect(restoredCombination.content == reordered.content && restoredCombination.components == reordered.components &&
+               restoredCombination.kind == .combination && restoredCombination.isFavorite,
+               "An imported combination remains identical after restarting")
+
+        let beforeInvalid = target.spells
+        let invalidCandidates = [
+            AISpell(title: "没有片段", content: "不能作为组合", kind: .combination),
+            AISpell(title: "重复片段", content: "", kind: .combination,
+                    components: [AISpellComponent(spell: prompt), AISpellComponent(spell: prompt)]),
+            AISpell(title: "空片段", content: "", kind: .combination,
+                    components: [AISpellComponent(spell: AISpell(title: "空", content: " \n "))]),
+            AISpell(id: prompt.id, title: "引用自己", content: "", kind: .combination,
+                    components: [AISpellComponent(spell: prompt)]),
+            AISpell(title: "普通咒语不能含片段", content: "原文", components: [AISpellComponent(spell: prompt)]),
+            AISpell(title: "背景卡不能含片段", content: "背景", kind: .context,
+                    components: [AISpellComponent(spell: prompt)])
+        ]
+        for invalid in invalidCandidates {
+            expectThrows("An invalid snapshot combination must not be saved") { try target.save(invalid) }
+        }
+        expect(target.spells == beforeInvalid, "Rejected combinations leave all saved records unchanged")
+
+        var malformed = try JSONSerialization.jsonObject(with: target.exportData()) as! [String: Any]
+        var records = malformed["spells"] as! [[String: Any]]
+        let combinationIndex = records.firstIndex { ($0["kind"] as? String) == "combination" }!
+        records[combinationIndex]["content"] = "不匹配的正文不能悄悄丢弃"
+        malformed["spells"] = records
+        let malformedData = try JSONSerialization.data(withJSONObject: malformed)
+        expectThrows("Inconsistent combination snapshots in a backup must be rejected") {
+            _ = try target.importData(malformedData)
+        }
+        expect(target.spells == beforeInvalid, "An invalid combination backup cannot partially import data")
     }
 }

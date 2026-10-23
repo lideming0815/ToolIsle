@@ -2,6 +2,50 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
+enum AISpellKind: String, Codable, CaseIterable, Identifiable {
+    case prompt
+    case context
+    case combination
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .prompt: return "咒语"
+        case .context: return "背景卡"
+        case .combination: return "组合"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .prompt: return "wand.and.stars"
+        case .context: return "doc.text"
+        case .combination: return "square.stack.3d.up"
+        }
+    }
+}
+
+/// A saved, ordered snapshot. The source identifier is only used for an explicit
+/// refresh in the editor; insertion never resolves a source or changes the saved text.
+struct AISpellComponent: Codable, Equatable, Identifiable {
+    let sourceID: UUID
+    var title: String
+    var content: String
+
+    var id: UUID { sourceID }
+
+    init(spell: AISpell) {
+        sourceID = spell.id
+        title = spell.title
+        content = spell.content
+    }
+
+    static func combinedContent(of components: [AISpellComponent]) -> String {
+        components.map(\.content).joined(separator: "\n\n")
+    }
+}
+
 /// A deliberately saved prompt. Its content is copied verbatim, including whitespace.
 struct AISpell: Codable, Equatable, Identifiable {
     let id: UUID
@@ -11,9 +55,12 @@ struct AISpell: Codable, Equatable, Identifiable {
     var isFavorite: Bool
     let createdAt: Date
     var updatedAt: Date
+    var kind: AISpellKind
+    var components: [AISpellComponent]
 
     init(id: UUID = UUID(), title: String, content: String, category: String = "",
-         isFavorite: Bool = false, createdAt: Date = Date(), updatedAt: Date? = nil) {
+         isFavorite: Bool = false, createdAt: Date = Date(), updatedAt: Date? = nil,
+         kind: AISpellKind = .prompt, components: [AISpellComponent] = []) {
         self.id = id
         self.title = title
         self.content = content
@@ -21,6 +68,25 @@ struct AISpell: Codable, Equatable, Identifiable {
         self.isFavorite = isFavorite
         self.createdAt = createdAt
         self.updatedAt = updatedAt ?? createdAt
+        self.kind = kind
+        self.components = components
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, content, category, isFavorite, createdAt, updatedAt, kind, components
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        title = try values.decode(String.self, forKey: .title)
+        content = try values.decode(String.self, forKey: .content)
+        category = try values.decode(String.self, forKey: .category)
+        isFavorite = try values.decode(Bool.self, forKey: .isFavorite)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        kind = try values.decodeIfPresent(AISpellKind.self, forKey: .kind) ?? .prompt
+        components = try values.decodeIfPresent([AISpellComponent].self, forKey: .components) ?? []
     }
 }
 
@@ -30,6 +96,8 @@ enum AISpellLibraryError: LocalizedError {
     case emptyContent
     case duplicateIdentifiers
     case spellNotFound
+    case invalidCombination
+    case libraryChangedDuringMigration
 
     var errorDescription: String? {
         switch self {
@@ -43,6 +111,10 @@ enum AISpellLibraryError: LocalizedError {
             return "咒语文件包含重复标识，未导入任何内容。"
         case .spellNotFound:
             return "这条咒语已不存在，请重新选择。"
+        case .invalidCombination:
+            return "组合需要至少一个非空片段，不能重复选择片段或引用自身。普通咒语和背景卡不能包含组合片段。"
+        case .libraryChangedDuringMigration:
+            return "咒语库文件已被其他程序修改。请重新读取后再保存，现有文件未被覆盖。"
         }
     }
 }
@@ -61,6 +133,7 @@ final class AISpellLibrary {
 
     let fileURL: URL
     private(set) var spells: [AISpell]
+    private var legacyData: Data?
 
     /// Samples are installed only for a genuinely absent file, including on the first
     /// launch. Unreadable, corrupt, unsupported, and intentionally empty files are distinct.
@@ -68,7 +141,11 @@ final class AISpellLibrary {
         self.fileURL = fileURL
         self.spells = []
         do {
-            self.spells = try Self.decode(Data(contentsOf: fileURL))
+            let data = try Data(contentsOf: fileURL)
+            self.spells = try Self.decode(data)
+            if try JSONDecoder().decode(Version.self, from: data).schemaVersion == 1 {
+                legacyData = data
+            }
         } catch let error as NSError
             where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
             try persist(seedIfMissing ? Self.examples : [])
@@ -78,6 +155,19 @@ final class AISpellLibrary {
     var categories: [String] {
         Array(Set(spells.map(\.category).filter { !$0.isEmpty }))
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// A duplicate hint must never change the captured body or conflate differently
+    /// formatted prompts. Search remains forgiving; capture matching is exact.
+    func matchingContent(_ content: String) -> AISpell? {
+        spells.first { $0.content.utf8.elementsEqual(content.utf8) }
+    }
+
+    static func suggestedTitle(for content: String) -> String {
+        let firstLine = content.components(separatedBy: .newlines)
+            .lazy.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        return firstLine.map { String($0.prefix(40)) } ?? "新咒语"
     }
 
     /// Space-separated terms all have to match, across the title, category, and complete
@@ -106,7 +196,8 @@ final class AISpellLibrary {
             let old = updated[index]
             candidate = AISpell(id: old.id, title: candidate.title, content: candidate.content,
                                 category: candidate.category, isFavorite: candidate.isFavorite,
-                                createdAt: old.createdAt, updatedAt: Date())
+                                createdAt: old.createdAt, updatedAt: Date(),
+                                kind: candidate.kind, components: candidate.components)
             updated[index] = candidate
         } else {
             candidate.updatedAt = Date()
@@ -145,27 +236,46 @@ final class AISpellLibrary {
         let data = try Self.encode(updated)
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
+        if let legacyData {
+            guard try Data(contentsOf: fileURL) == legacyData else {
+                throw AISpellLibraryError.libraryChangedDuringMigration
+            }
+            let backupName = "\(fileURL.deletingPathExtension().lastPathComponent)-schema1-\(UUID().uuidString).json"
+            let backupURL = fileURL.deletingLastPathComponent().appendingPathComponent(backupName)
+            // Preserve the entire original document before the first schema upgrade.
+            // A failed backup aborts the write; an existing backup is never replaced.
+            try legacyData.write(to: backupURL, options: .withoutOverwriting)
+        }
         try data.write(to: fileURL, options: .atomic)
         spells = updated
+        legacyData = nil
     }
 
     private static func encode(_ spells: [AISpell]) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .millisecondsSince1970
-        return try encoder.encode(Document(schemaVersion: 1, spells: spells))
+        return try encoder.encode(Document(schemaVersion: 2, spells: spells))
     }
 
     private static func decode(_ data: Data) throws -> [AISpell] {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .millisecondsSince1970
         let version = try decoder.decode(Version.self, from: data).schemaVersion
-        guard version == 1 else { throw AISpellLibraryError.unsupportedVersion(version) }
+        guard version == 1 || version == 2 else { throw AISpellLibraryError.unsupportedVersion(version) }
         let document = try decoder.decode(Document.self, from: data)
         guard Set(document.spells.map(\.id)).count == document.spells.count else {
             throw AISpellLibraryError.duplicateIdentifiers
         }
-        return try document.spells.map(validated)
+        return try document.spells.map { spell in
+            let cleaned = try validated(spell)
+            // A saved document contains both the editable snapshots and its insertion
+            // text. Reject disagreement rather than silently discarding either value.
+            if spell.kind == .combination && !spell.content.utf8.elementsEqual(cleaned.content.utf8) {
+                throw AISpellLibraryError.invalidCombination
+            }
+            return cleaned
+        }
     }
 
     private static func validated(_ spell: AISpell) throws -> AISpell {
@@ -173,6 +283,18 @@ final class AISpellLibrary {
         cleaned.title = spell.title.trimmingCharacters(in: .whitespacesAndNewlines)
         cleaned.category = spell.category.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.title.isEmpty else { throw AISpellLibraryError.invalidTitle }
+        if cleaned.kind == .combination {
+            guard !cleaned.components.isEmpty,
+                  Set(cleaned.components.map(\.sourceID)).count == cleaned.components.count,
+                  cleaned.components.allSatisfy({ component in
+                      component.sourceID != cleaned.id &&
+                      !component.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                      !component.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                  }) else { throw AISpellLibraryError.invalidCombination }
+            cleaned.content = AISpellComponent.combinedContent(of: cleaned.components)
+        } else if !cleaned.components.isEmpty {
+            throw AISpellLibraryError.invalidCombination
+        }
         guard !cleaned.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AISpellLibraryError.emptyContent
         }
