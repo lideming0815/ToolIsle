@@ -360,10 +360,10 @@ struct AISpellQuickViewRegression {
         try snapshotIfRequested(hosting, name: "ai-spells-combination.png")
         try expect(!store.spells.contains { $0.id == draft.id }, "Opening a combination editor does not persist its draft")
 
-        // The editor has a fixed 760 x 620 layout: its component list begins at
-        // x = 291, y = 140. Arrow buttons are at the right edge of each row.
+        // The native 760 x 620 snapshot places the first down arrow at (701, 163)
+        // and the second up arrow at (680, 232), measured from the content's top left.
         // Saved component order/body, not the coordinates, are the oracle.
-        clickFromTop(x: 705, y: 154, in: hosting, window: window) // context down
+        clickFromTop(x: 701, y: 163, in: hosting, window: window) // context down
         pumpEvents(for: 0.2)
         clickEditorFooter(in: window, save: true)
         pumpEvents(for: 0.2)
@@ -373,7 +373,7 @@ struct AISpellQuickViewRegression {
         try expect(saved.last?.content == prompt.content + "\n\n" + context.content,
                    "Combination Save passes the complete reordered bodies, separated by two newlines")
 
-        clickFromTop(x: 686, y: 219, in: hosting, window: window) // context up from second row
+        clickFromTop(x: 680, y: 232, in: hosting, window: window) // context up from second row
         pumpEvents(for: 0.2)
         clickEditorFooter(in: window, save: true)
         pumpEvents(for: 0.2)
