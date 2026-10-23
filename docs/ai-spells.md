@@ -79,6 +79,12 @@ bash scripts/test_ai_spells.sh
 
 macOS 上同时编译并测试实际 `AISpellStore`；Linux 运行 Foundation 核心的持久化、搜索和导入回归。
 
+剪切板读取器回归使用独立命名的测试剪切板，覆盖纯文字、URL、RTF、HTML-only、图片/文件拒绝，并检查读取前后所有表示及变更计数保持不变，不读写系统通用剪切板：
+
+```sh
+bash scripts/test_ai_spell_capture.sh
+```
+
 插入流程回归通过注入的运行环境检查真实协调逻辑：目标状态、按键释放、权限拒绝、目标退出、剪切板变更和单次粘贴请求等。这组测试不修改系统权限，也不向外部应用发送内容；真实目标捕获与系统事件投递由 macOS 适配层完成，仍需实机验收：
 
 ```sh
@@ -91,7 +97,7 @@ bash scripts/test_ai_spell_insertion.sh
 bash scripts/test_ai_spell_interaction.sh /tmp/ai-spells-interaction
 ```
 
-该脚本编译生产 `AISpellQuickView` 与 AppKit 搜索框，使用隔离的样例库验证行按钮、搜索、回车插入、⌘↩ 复制、忙碌状态和管理入口，并可生成 `ai-spells-quick-panel.png` 原生视图截图。鼠标按下、抬起和键盘事件进入测试进程的 AppKit 队列，实际触发生产按钮和搜索框；点击位置以固定的 440×500 样例面板原生截图为准，不直接调用待测按钮回调。输入法保护通过真实 `NSTextView` 的 marked text 和生产委托检查，不能替代系统中文输入法端到端验收；其插入回调只记录调用，不等同于外部应用粘贴成功。
+该脚本编译生产快捷面板、管理窗口与编辑器，使用隔离样例库验证行按钮、搜索、回车插入、⌘↩ 复制、忙碌状态、收藏确认/取消/排队，以及组合排序和保存；生成快捷面板、管理窗口和组合编辑器的原生 PNG 截图。鼠标按下、抬起和键盘事件进入测试进程的 AppKit 队列，实际触发生产按钮和搜索框，不直接调用待测按钮回调。输入法保护通过真实 `NSTextView` 的 marked text 和生产委托检查，不能替代系统中文输入法端到端验收；其插入回调只记录调用，不等同于外部应用粘贴成功。
 
 完整发行包继续使用仓库既有流程：
 
@@ -99,7 +105,7 @@ bash scripts/test_ai_spell_interaction.sh /tmp/ai-spells-interaction
 bash publish/publish.sh
 ```
 
-`.github/workflows/ai-spells-validation.yml` 在 macOS 执行上述三组回归并调用打包脚本，保留 DMG、构建日志和源提交记录。原生 PNG 单独保存在 **AI-Spells-Quick-View** artifact，不混入 **BangsBuddy-AI-Spells-arm64** 安装包 artifact；如果后续回归失败，已生成的截图仍会上传。PR 构建检出该 PR 的实际源提交，便于将 `package.json.source_commit` 与分支代码对应。完整包沿用现有 BangsBuddy 身份与 Thaw 集成，不改签名、辅助组件或更新机制。
+`.github/workflows/ai-spells-validation.yml` 在 macOS 执行上述四组回归并调用打包脚本，保留 DMG、构建日志和源提交记录。原生 PNG 单独保存在 **AI-Spells-Quick-View** artifact，不混入 **BangsBuddy-AI-Spells-arm64** 安装包 artifact；如果后续回归失败，已生成的截图仍会上传。PR 构建检出该 PR 的实际源提交，便于将 `package.json.source_commit` 与分支代码对应。完整包沿用现有 BangsBuddy 身份与 Thaw 集成，不改签名、辅助组件或更新机制。
 
 ### 开发与首轮 CI 验证记录（2026-10-23）
 

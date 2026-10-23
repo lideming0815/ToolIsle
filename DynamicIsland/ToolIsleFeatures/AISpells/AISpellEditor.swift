@@ -31,7 +31,7 @@ struct AISpellEditor: View {
         _components = State(initialValue: spell.components)
     }
 
-    private var preview: String { components.map(\.content).joined(separator: "\n\n") }
+    private var preview: String { AISpellComponent.combinedContent(of: components) }
     private var canSave: Bool {
         !store.isReadOnly && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !(kind == .combination ? preview : content).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

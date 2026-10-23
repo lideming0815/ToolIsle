@@ -16,9 +16,11 @@ on:
       - 'tests/AISpellLibraryRegression.swift'
       - 'tests/AISpellInsertionRegression.swift'
       - 'tests/AISpellQuickViewRegression.swift'
+      - 'tests/AISpellClipboardCaptureRegression.swift'
       - 'scripts/test_ai_spells.sh'
       - 'scripts/test_ai_spell_insertion.sh'
       - 'scripts/test_ai_spell_interaction.sh'
+      - 'scripts/test_ai_spell_capture.sh'
       - '.github/workflows/ai-spells-validation.yml'
   pull_request:
     paths:
@@ -30,9 +32,11 @@ on:
       - 'tests/AISpellLibraryRegression.swift'
       - 'tests/AISpellInsertionRegression.swift'
       - 'tests/AISpellQuickViewRegression.swift'
+      - 'tests/AISpellClipboardCaptureRegression.swift'
       - 'scripts/test_ai_spells.sh'
       - 'scripts/test_ai_spell_insertion.sh'
       - 'scripts/test_ai_spell_interaction.sh'
+      - 'scripts/test_ai_spell_capture.sh'
       - '.github/workflows/ai-spells-validation.yml'
   workflow_dispatch:
 
@@ -60,6 +64,8 @@ jobs:
         run: bash scripts/test_ai_spells.sh
       - name: Run spell insertion contract regressions
         run: bash scripts/test_ai_spell_insertion.sh
+      - name: Run isolated pasteboard capture regressions
+        run: bash scripts/test_ai_spell_capture.sh
       - name: Prepare native toolchain
         run: |
           sudo xcodebuild -runFirstLaunch

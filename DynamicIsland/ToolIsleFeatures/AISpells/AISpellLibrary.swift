@@ -40,6 +40,10 @@ struct AISpellComponent: Codable, Equatable, Identifiable {
         title = spell.title
         content = spell.content
     }
+
+    static func combinedContent(of components: [AISpellComponent]) -> String {
+        components.map(\.content).joined(separator: "\n\n")
+    }
 }
 
 /// A deliberately saved prompt. Its content is copied verbatim, including whitespace.
@@ -287,7 +291,7 @@ final class AISpellLibrary {
                       !component.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
                       !component.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                   }) else { throw AISpellLibraryError.invalidCombination }
-            cleaned.content = cleaned.components.map(\.content).joined(separator: "\n\n")
+            cleaned.content = AISpellComponent.combinedContent(of: cleaned.components)
         } else if !cleaned.components.isEmpty {
             throw AISpellLibraryError.invalidCombination
         }

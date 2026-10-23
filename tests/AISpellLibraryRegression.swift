@@ -191,6 +191,28 @@ struct AISpellLibraryRegression {
         expect(!blockedStore.isReadOnly && blockedStore.errorMessage == nil,
                "Reload can recover after the original file has been repaired")
         expect(blockedStore.spells.first?.content == "已保存", "Recovery publishes the repaired library")
+
+        let changingImportFile = directory.appendingPathComponent("changing-import-store.json")
+        try Data(#"{"schemaVersion":1,"spells":[]}"#.utf8).write(to: changingImportFile)
+        let changingImportStore = AISpellStore(fileURL: changingImportFile)
+        expect(!changingImportStore.isReadOnly && changingImportStore.spells.isEmpty,
+               "Import migration fixture opens an empty legacy library")
+        let externallyChanged = Data(#"{"schemaVersion":1,"spells":[{"id":"B1FD4DAB-25BF-4617-9BFE-7864156BDE31","title":"外部修改","content":"不能覆盖的新内容","category":"项目","isFavorite":false,"createdAt":1700000000000,"updatedAt":1700000001000}]}"#.utf8)
+        try externallyChanged.write(to: changingImportFile)
+        expect(changingImportStore.importData(recoveryData) == nil,
+               "Import refuses to migrate a legacy library changed since loading")
+        expect(changingImportStore.isReadOnly && changingImportStore.errorMessage != nil,
+               "An import migration conflict becomes read-only and offers the existing reload recovery")
+        expect(changingImportStore.spells.isEmpty, "A conflicted import does not publish unsaved additions")
+        expect(!changingImportStore.save(AISpell(title: "不能覆盖", content: "过时状态不能写入")),
+               "An import conflict blocks subsequent saves until reload")
+        let preservedImportFile = try Data(contentsOf: changingImportFile)
+        expect(preservedImportFile == externallyChanged, "Import conflict leaves the newer external bytes untouched")
+        changingImportStore.reload()
+        expect(!changingImportStore.isReadOnly && changingImportStore.errorMessage == nil,
+               "Reload clears the migration conflict after reading the newer valid file")
+        expect(changingImportStore.spells.first?.content == "不能覆盖的新内容",
+               "Reload publishes the external edit rather than discarded import additions")
         #endif
 
         print("PASS: \(assertions) AI spell library assertions")
@@ -213,9 +235,14 @@ struct AISpellLibraryRegression {
         try library.save(context)
         let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
         expect(saved["schemaVersion"] as? Int == 2, "The first mutation writes the new document version")
-        let backups = try FileManager.default.contentsOfDirectory(at: migrationDirectory, includingPropertiesForKeys: nil)
-            .filter { $0 != file }
-        expect(backups.count == 1, "The first legacy mutation creates one migration backup")
+        let entries = try FileManager.default.contentsOfDirectory(at: migrationDirectory, includingPropertiesForKeys: nil)
+        // Directory enumeration may use a base URL while appendingPathComponent
+        // constructs an absolute URL. Compare filenames, not URL representation.
+        let backups = entries.filter {
+            $0.lastPathComponent.hasPrefix("library-schema1-") && $0.pathExtension == "json"
+        }
+        expect(backups.count == 1,
+               "The first legacy mutation creates one migration backup; files: \(entries.map(\.lastPathComponent).sorted())")
         let backupBytes = try Data(contentsOf: backups[0])
         expect(backupBytes == original, "The migration backup contains the exact old bytes")
         try library.toggleFavorite(id: context.id)
