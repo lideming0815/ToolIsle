@@ -120,8 +120,9 @@ struct AISpellsView: View {
         VStack(spacing: 9) {
             AISpellSearchField(
                 text: $query, focusRequest: focusRequest, isActive: acceptsQuickActions,
-                onMove: moveSelection, onCopy: copySelection,
-                onPaste: pasteSelection, onClose: onClose
+                accessibilityIdentifier: "ai-spells-search",
+                onMove: moveSelection, onSubmit: copySelection,
+                onCommandSubmit: pasteSelection, onClose: onClose
             )
             .frame(height: 28)
             HStack(spacing: 12) {
@@ -448,15 +449,17 @@ private struct AISpellEditor: View {
 }
 
 /// Handle navigation only while the search editor has focus. In particular,
-/// Return used to confirm a Chinese input candidate must never copy a prompt.
+/// Return used to confirm a Chinese input candidate must not use a prompt.
+/// The quick panel and manager choose their own Return / Command-Return actions.
 @MainActor
-private struct AISpellSearchField: NSViewRepresentable {
+struct AISpellSearchField: NSViewRepresentable {
     @Binding var text: String
     let focusRequest: UUID
     let isActive: Bool
+    let accessibilityIdentifier: String
     let onMove: (Int) -> Void
-    let onCopy: () -> Void
-    let onPaste: () -> Void
+    let onSubmit: () -> Void
+    let onCommandSubmit: () -> Void
     let onClose: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -469,13 +472,13 @@ private struct AISpellSearchField: NSViewRepresentable {
         field.maximumRecents = 0
         field.delegate = context.coordinator
         field.setAccessibilityLabel("搜索咒语")
-        field.setAccessibilityIdentifier("ai-spells-search")
+        field.setAccessibilityIdentifier(accessibilityIdentifier)
         return field
     }
 
     func updateNSView(_ field: SpellSearchField, context: Context) {
         context.coordinator.parent = self
-        field.pasteAction = isActive ? onPaste : nil
+        field.commandSubmitAction = isActive ? onCommandSubmit : nil
         if field.stringValue != text { field.stringValue = text }
         if isActive, context.coordinator.lastFocusRequest != focusRequest {
             context.coordinator.lastFocusRequest = focusRequest
@@ -506,8 +509,8 @@ private struct AISpellSearchField: NSViewRepresentable {
             case #selector(NSResponder.moveUp(_:)) where modifiers.isEmpty:
                 parent.onMove(-1); return true
             case #selector(NSResponder.insertNewline(_:)):
-                if modifiers == .command { parent.onPaste(); return true }
-                if modifiers.isEmpty { parent.onCopy(); return true }
+                if modifiers == .command { parent.onCommandSubmit(); return true }
+                if modifiers.isEmpty { parent.onSubmit(); return true }
                 return false
             case #selector(NSResponder.cancelOperation(_:)):
                 parent.onClose(); return true
@@ -518,15 +521,15 @@ private struct AISpellSearchField: NSViewRepresentable {
     }
 
     final class SpellSearchField: NSSearchField {
-        var pasteAction: (() -> Void)?
+        var commandSubmitAction: (() -> Void)?
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
             if (event.keyCode == 36 || event.keyCode == 76), modifiers == .command,
                let editor = currentEditor() as? NSTextView,
                window?.firstResponder === editor, window?.attachedSheet == nil, !editor.hasMarkedText(),
-               let pasteAction {
-                pasteAction()
+               let commandSubmitAction {
+                commandSubmitAction()
                 return true
             }
             return super.performKeyEquivalent(with: event)

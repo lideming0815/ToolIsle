@@ -80,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The separate-tab clipboard now uses the same card grid (two columns) with drag-out and per-item delete, replacing the single-column list (#698).
 
 ### Fixed
+- **AI 咒语快速取用**：快捷呼出改为紧凑搜索列表，单击或回车直接插入原输入框，⌘↩仅复制；完整管理窗口保留编辑与备份。补充当前运行版本的辅助功能状态和插入失败提示，复用管理窗口时刷新目标，沿用原咒语数据目录。（#13）
 - **Issue 状态投影**：统一状态显示、颜色和筛选，保留自定义状态名称与未知状态；GitHub PR 过滤不再影响分页判断。真实 Gitee 账户复现尚需本机诊断。
 - A tab count in the notch settings could not be formatted. `%lld tab%@ enabled · min %lld px` was translated using `%1lld` — missing the `$` — so it was never parsed as a positional specifier, and the separator was U+22C5 (dot operator) rather than the U+00B7 the source uses. (#789)
 - The microphone privacy indicator description showed an unrelated sentence about a meeting start time, which also introduced a `%@` that the source string does not have — reading an argument that was never passed. (#789)
