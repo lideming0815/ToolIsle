@@ -24,6 +24,49 @@ struct AISpellQuickViewRegression {
         override var canBecomeKey: Bool { true }
     }
 
+    /// SwiftUI can return AX nodes that adopt a role-specific protocol instead
+    /// of the complete NSAccessibilityProtocol. Use AppKit's public NSObject
+    /// accessibility bridge for those nodes; do not discard their descendants.
+    private struct AccessibleElement {
+        let object: NSObject
+
+        func identifier() -> String? {
+            if let element = object as? NSAccessibilityProtocol {
+                return element.accessibilityIdentifier()
+            }
+            if let element = object as? NSAccessibilityElementProtocol,
+               let value = element.accessibilityIdentifier?() { return value }
+            return object.accessibilityAttributeValue(.identifier) as? String
+        }
+
+        func children() -> [Any] {
+            if let element = object as? NSAccessibilityProtocol {
+                return element.accessibilityChildren() ?? []
+            }
+            return object.accessibilityAttributeValue(.children) as? [Any] ?? []
+        }
+
+        func accessibilityRole() -> NSAccessibility.Role? {
+            if let element = object as? NSAccessibilityProtocol {
+                return element.accessibilityRole()
+            }
+            guard let value = object.accessibilityAttributeValue(.role) as? String else { return nil }
+            return NSAccessibility.Role(rawValue: value)
+        }
+
+        func accessibilityPerformPress() -> Bool {
+            if let element = object as? NSAccessibilityProtocol {
+                return element.accessibilityPerformPress()
+            }
+            if let button = object as? NSAccessibilityButton {
+                return button.accessibilityPerformPress()
+            }
+            guard object.accessibilityActionNames().contains(.press) else { return false }
+            object.accessibilityPerformAction(.press)
+            return true
+        }
+    }
+
     private static var assertions = 0
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
@@ -188,23 +231,23 @@ struct AISpellQuickViewRegression {
         return nil
     }
 
-    private static func accessibleElement(_ id: String, in root: NSView) throws -> NSAccessibilityProtocol {
+    private static func accessibleElement(_ id: String, in root: NSView) throws -> AccessibleElement {
         guard let element = findAccessibleElement(id, in: root) else {
+            dumpAccessibilityTree(root)
             throw Failure(description: "Native accessibility element not found: \(id)")
         }
         return element
     }
 
-    private static func findAccessibleElement(_ id: String, in root: NSView) -> NSAccessibilityProtocol? {
+    private static func findAccessibleElement(_ id: String, in root: NSView) -> AccessibleElement? {
         var visited = Set<ObjectIdentifier>()
-        func visit(_ value: Any) -> NSAccessibilityProtocol? {
-            let object = value as AnyObject
+        func visit(_ value: Any) -> AccessibleElement? {
+            guard let object = value as? NSObject else { return nil }
             guard visited.insert(ObjectIdentifier(object)).inserted else { return nil }
-            if let element = value as? NSAccessibilityProtocol {
-                if element.accessibilityIdentifier() == id { return element }
-                for child in element.accessibilityChildren() ?? [] {
-                    if let found = visit(child) { return found }
-                }
+            let element = AccessibleElement(object: object)
+            if element.identifier() == id { return element }
+            for child in element.children() {
+                if let found = visit(child) { return found }
             }
             if let view = value as? NSView {
                 for child in view.subviews {
@@ -214,6 +257,25 @@ struct AISpellQuickViewRegression {
             return nil
         }
         return visit(root)
+    }
+
+    /// Bounded fixture-only diagnostics make a native bridge failure reviewable.
+    private static func dumpAccessibilityTree(_ root: NSView) {
+        var visited = Set<ObjectIdentifier>()
+        func visit(_ value: Any, depth: Int) {
+            guard visited.count < 80, let object = value as? NSObject,
+                  visited.insert(ObjectIdentifier(object)).inserted else { return }
+            let element = AccessibleElement(object: object)
+            let children = element.children()
+            print("AX \(String(repeating: " ", count: min(depth, 12)))\(type(of: object)) " +
+                  "id=\(element.identifier() ?? "nil") role=\(element.accessibilityRole()?.rawValue ?? "nil") " +
+                  "children=\(children.count)")
+            for child in children { visit(child, depth: depth + 1) }
+            if let view = value as? NSView {
+                for child in view.subviews { visit(child, depth: depth + 1) }
+            }
+        }
+        visit(root, depth: 0)
     }
 
     private static func keyEvent(_ type: NSEvent.EventType, code: UInt16, characters: String,
