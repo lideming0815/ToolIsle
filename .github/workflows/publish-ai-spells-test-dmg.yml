@@ -1,0 +1,196 @@
+name: Publish verified AI spells test DMG
+
+on:
+  push:
+    branches: [release/ai-spells-dmg-b4d2152]
+    paths: [.github/workflows/publish-ai-spells-test-dmg.yml]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: publish-ai-spells-quick-b4d2152
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'lideming0815/ToolIsle' && github.ref == 'refs/heads/release/ai-spells-dmg-b4d2152'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Verify existing artifact and publish original DMG as prerelease
+        shell: python {0}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_HOST: github.com
+          GH_PROMPT_DISABLED: "1"
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+          import subprocess
+          import tempfile
+          import zipfile
+
+          REPO = "lideming0815/ToolIsle"
+          SOURCE = "b4d2152ccdd507405e3ed27b3c1df6c840e78346"
+          RUN = 39929838719
+          ARTIFACT = 12491596879
+          ZIP_SHA = "65c81cfe65afd9e607565de8523fab251970d5555223aa13ac704d6221694a56"
+          ZIP_SIZE = 42348790
+          DMG_SHA = "cd9119f1840f9e10091d4b93656fd7feeab80338f1b890bb84082cd314ad3fa1"
+          DMG_SIZE = 44543025
+          DMG_NAME = "BangsBuddy-2.3.3-1644-arm64.dmg"
+          TAG = "ai-spells-quick-b4d2152"
+          TITLE = "BangsBuddy AI 咒语剪切板测试版 (b4d2152)"
+          NOTES = """## AI 咒语剪切板测试版 — Apple Silicon
+
+          按用户要求，将既有 GitHub Actions 构建产物中的 DMG 单独提供下载。
+          DMG 字节内容未修改，也未重新构建。此发布不是稳定版，不作为 latest。
+
+          ### 安全状态
+
+          - 此包采用 ad-hoc 临时签名，没有正式 Apple Developer ID 签名，未经过 Apple 公证。
+          - Chrome 曾将包含此 DMG 的原始 ZIP 标为“危险内容”；具体原因尚未查明。
+          - 提供独立 DMG 链接不表示警告已解除，也不是绕过浏览器或系统防护的建议。
+          - 2026-10-23 独立静态复检：ClamAV 1.5.4，daily 病毒库 28162（当日更新），扫描原 ZIP、DMG 和解包后的 286 个非空文件，合计 288 个文件，未检出。单引擎未检出不构成安全保证或 Chrome 误报结论。
+
+          ### 可追溯信息
+
+          - 应用源码提交：b4d2152ccdd507405e3ed27b3c1df6c840e78346
+          - 源码 PR：https://github.com/lideming0815/ToolIsle/pull/13 （此发布不合并 PR）
+          - 原始构建：https://github.com/lideming0815/ToolIsle/actions/runs/39929838719
+          - 包含 AI 咒语快捷面板与 Thaw 菜单栏组件。咒语仍保存于应用包外的 Application Support 目录。
+          - DMG SHA256：`cd9119f1840f9e10091d4b93656fd7feeab80338f1b890bb84082cd314ad3fa1`
+
+          附件包含原始 DMG、SHA256SUMS.txt 和 package.json。
+          """
+
+          def require(condition, message):
+              if not condition:
+                  raise RuntimeError(message)
+
+          def digest(path):
+              with path.open("rb") as stream:
+                  return hashlib.file_digest(stream, "sha256").hexdigest()
+
+          def api(endpoint, method="GET", payload=None, allow_missing=False):
+              args = ["gh", "api", endpoint, "--method", method,
+                      "-H", "Accept: application/vnd.github+json",
+                      "-H", "X-GitHub-Api-Version: 2022-11-28"]
+              body = None
+              if payload is not None:
+                  args += ["--input", "-"]
+                  body = json.dumps(payload)
+              result = subprocess.run(args, input=body, capture_output=True, text=True)
+              if result.returncode:
+                  if allow_missing and "(HTTP 404)" in result.stderr:
+                      return None
+                  raise RuntimeError("GitHub API request failed: " + result.stderr.strip())
+              return json.loads(result.stdout)
+
+          def verify_archive(archive, destination):
+              require(archive.stat().st_size == ZIP_SIZE, "Unexpected ZIP size")
+              require(digest(archive) == ZIP_SHA, "ZIP checksum mismatch")
+              destination.mkdir(parents=True, exist_ok=False)
+              with zipfile.ZipFile(archive) as bundle:
+                  require(bundle.testzip() is None, "ZIP integrity check failed")
+                  entries = bundle.infolist()
+                  require(len(entries) == 5, "Unexpected artifact members")
+                  for entry in entries:
+                      path = PurePosixPath(entry.filename)
+                      require(not path.is_absolute() and ".." not in path.parts, "Unsafe archive path")
+                      require(not (entry.flag_bits & 1), "Unexpected encrypted artifact")
+                  for name in (DMG_NAME, "package.json", "SHA256SUMS.txt"):
+                      matches = [entry for entry in entries if PurePosixPath(entry.filename).name == name]
+                      require(len(matches) == 1, "Missing or duplicate asset: " + name)
+                      (destination / name).write_bytes(bundle.read(matches[0]))
+              dmg = destination / DMG_NAME
+              require(dmg.stat().st_size == DMG_SIZE and digest(dmg) == DMG_SHA, "DMG checksum mismatch")
+              manifest = json.loads((destination / "package.json").read_text())
+              require(manifest.get("source_commit") == SOURCE, "Wrong application source commit")
+              require(manifest.get("source_dirty") is False, "Build was not from a clean source tree")
+              require(manifest.get("notarized") is False, "Release notes do not match notarization state")
+              require(manifest.get("architecture") == "arm64", "Wrong architecture")
+              require((destination / "SHA256SUMS.txt").read_text().strip().split() == [DMG_SHA, DMG_NAME],
+                      "Packaged checksum file mismatch")
+              return [destination / name for name in (DMG_NAME, "package.json", "SHA256SUMS.txt")]
+
+          def verify_tag():
+              ref = api(f"repos/{REPO}/git/ref/tags/{TAG}", allow_missing=True)
+              if ref is None:
+                  return
+              obj = ref["object"]
+              for _ in range(4):
+                  if obj["type"] == "commit":
+                      require(obj["sha"] == SOURCE, "Existing tag points to different application source")
+                      return
+                  require(obj["type"] == "tag", "Unexpected tag object type")
+                  obj = api(f"repos/{REPO}/git/tags/{obj['sha']}")["object"]
+              raise RuntimeError("Tag resolution exceeded limit")
+
+          def verify_assets(release_id, files):
+              assets = api(f"repos/{REPO}/releases/{release_id}/assets?per_page=100")
+              require({asset["name"] for asset in assets} == {path.name for path in files},
+                      "Release has missing or unexpected assets")
+              for path in files:
+                  matches = [asset for asset in assets if asset["name"] == path.name]
+                  require(len(matches) == 1, "Duplicate release asset")
+                  asset = matches[0]
+                  require(asset["state"] == "uploaded" and asset["size"] == path.stat().st_size,
+                          "Release asset upload incomplete")
+                  require(asset.get("digest") == "sha256:" + digest(path), "Uploaded asset checksum mismatch")
+              return next(asset["browser_download_url"] for asset in assets if asset["name"] == DMG_NAME)
+
+          def main():
+              require(os.environ.get("GITHUB_REPOSITORY") == REPO, "Wrong repository")
+              require(os.environ.get("GITHUB_REF") == "refs/heads/release/ai-spells-dmg-b4d2152", "Wrong branch")
+              run = api(f"repos/{REPO}/actions/runs/{RUN}")
+              require(run["head_sha"] == SOURCE and run["head_repository"]["full_name"] == REPO,
+                      "Unexpected original build source")
+              require(run["status"] == "completed" and run["conclusion"] == "success", "Original build did not pass")
+              artifact = api(f"repos/{REPO}/actions/artifacts/{ARTIFACT}")
+              require(not artifact["expired"] and artifact["workflow_run"]["id"] == RUN, "Wrong or expired artifact")
+              require(artifact["digest"] == "sha256:" + ZIP_SHA, "Artifact metadata checksum mismatch")
+              verify_tag()
+              with tempfile.TemporaryDirectory(prefix="bangsbuddy-dmg-") as working:
+                  working = Path(working)
+                  archive = working / "artifact.zip"
+                  with archive.open("wb") as stream:
+                      subprocess.run(["gh", "api", f"repos/{REPO}/actions/artifacts/{ARTIFACT}/zip"],
+                                     stdout=stream, check=True)
+                  files = verify_archive(archive, working / "assets")
+                  release = api(f"repos/{REPO}/releases/tags/{TAG}", allow_missing=True)
+                  if release is None:
+                      release = api(f"repos/{REPO}/releases", "POST", {
+                          "tag_name": TAG, "target_commitish": SOURCE, "name": TITLE, "body": NOTES,
+                          "draft": True, "prerelease": True, "make_latest": "false"})
+                  require(release["target_commitish"] == SOURCE and release["prerelease"], "Unexpected existing release")
+                  require(release["body"] == NOTES, "Existing release safety notes differ")
+                  if release["draft"]:
+                      assets = api(f"repos/{REPO}/releases/{release['id']}/assets?per_page=100")
+                      existing = {asset["name"] for asset in assets}
+                      require(existing <= {path.name for path in files}, "Unexpected existing draft asset")
+                      for path in files:
+                          if path.name not in existing:
+                              subprocess.run(["gh", "release", "upload", TAG, str(path), "--repo", REPO], check=True)
+                      verify_assets(release["id"], files)
+                      verify_tag()
+                      release = api(f"repos/{REPO}/releases/{release['id']}", "PATCH",
+                                    {"draft": False, "prerelease": True, "make_latest": "false"})
+                  require(not release["draft"] and release["prerelease"], "Release publication incomplete")
+                  verify_tag()
+                  url = verify_assets(release["id"], files)
+                  print("Verified direct DMG download: " + url)
+                  summary = os.environ.get("GITHUB_STEP_SUMMARY")
+                  if summary:
+                      with open(summary, "a", encoding="utf-8") as stream:
+                          stream.write(f"[Direct DMG download]({url})\n\nSHA256: `{DMG_SHA}`\n\n")
+                          stream.write("Same unnotarized test build; Chrome warning remains unresolved.\n")
+
+          if __name__ == "__main__":
+              main()
