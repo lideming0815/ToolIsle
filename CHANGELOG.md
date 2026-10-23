@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **AI 咒语管理器**：使用独立本地库长期保存提示词，支持新增、编辑、分类、收藏、全文搜索及 JSON 导入导出；可自定义全局快捷键快速呼出，复制原文或插入呼出前的应用，插入不自动发送消息。首次使用提供四条可编辑示例，清空剪切板历史不影响咒语库。（#12）
 - **Git 仓库聚合阅读**：Gitee、GitLab 和 GitHub.com 的已选仓库可同时阅读，按完整仓库 URL 分组；连接、分页及失败状态独立管理，兼容原有配置。
 - **ToolIsle native Gitee reader**: restore the Atoll app instead of the superseded standalone toolbox; retain supplied branding, scoped display/window fixes, read-only Issues, associated navigation, grouped projects and compact filters.
 - **Connection status HUDs**: Atoll now shows a Dynamic Island HUD when the Mac goes offline, and a compact inline HUD when it connects to Wi-Fi or Personal Hotspot, using the matching Wi-Fi or hotspot symbol and the connected network name. (#827)

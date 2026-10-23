@@ -1,0 +1,62 @@
+name: AI spells validation and BangsBuddy package
+
+on:
+  push:
+    branches: [dev, "feat/ai-spells-manager"]
+    paths:
+      - 'DynamicIsland/ToolIsleFeatures/AISpells/**'
+      - 'DynamicIsland/DynamicIslandApp.swift'
+      - 'DynamicIsland/Shortcuts/ShortcutConstants.swift'
+      - 'DynamicIsland/components/Settings/SettingsView.swift'
+      - 'DynamicIsland/models/Constants.swift'
+      - 'tests/AISpellLibraryRegression.swift'
+      - 'scripts/test_ai_spells.sh'
+      - '.github/workflows/ai-spells-validation.yml'
+  pull_request:
+    paths:
+      - 'DynamicIsland/ToolIsleFeatures/AISpells/**'
+      - 'tests/AISpellLibraryRegression.swift'
+      - 'scripts/test_ai_spells.sh'
+      - '.github/workflows/ai-spells-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-spells-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-package:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          lfs: true
+          persist-credentials: false
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Run isolated spell library and Store regressions
+        run: bash scripts/test_ai_spells.sh
+      - name: Prepare native toolchain
+        run: |
+          sudo xcodebuild -runFirstLaunch
+          sudo xcodebuild -downloadComponent MetalToolchain
+      - name: Build complete BangsBuddy DMG with existing release recipe
+        run: bash publish/publish.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: BangsBuddy-AI-Spells-arm64
+          path: |
+            publish/**/*.dmg
+            publish/**/build.log
+            publish/**/environment.txt
+            publish/**/package.json
+            publish/**/SHA256SUMS.txt
+          if-no-files-found: warn
+          retention-days: 14

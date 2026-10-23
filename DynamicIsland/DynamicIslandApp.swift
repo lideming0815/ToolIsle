@@ -28,6 +28,7 @@ import SkyLightWindow
 struct DynamicNotchApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Default(.menubarIcon) var showMenuBarIcon
+    @Default(.enableAISpells) var enableAISpells
     @Environment(\.openWindow) var openWindow
 
     let updaterController: SPUStandardUpdaterController
@@ -51,6 +52,8 @@ struct DynamicNotchApp: App {
                 SettingsWindowController.shared.showWindow()
             }
             Button("Git 仓库 Issues…") { GIReaderWindowController.shared.show() }
+            Button("AI 咒语…") { AISpellPanelController.shared.show() }
+                .disabled(!enableAISpells)
             Menu("菜单栏") { ThawMenuItems() }
             CheckForUpdatesView(updater: updaterController.updater)
             Divider()
@@ -323,6 +326,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func hideWindowsForLock() {
         guard !windowsHiddenForLock else { return }
         windowsHiddenForLock = true
+        AISpellPanelController.shared.hide()
 
         if Defaults[.showOnAllDisplays] {
             for window in windows.values {
@@ -937,6 +941,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }.store(in: &cancellables)
 
+        Defaults.publisher(.enableAISpells, options: []).sink { [weak self] change in
+            Task { @MainActor [weak self] in
+                self?.updateFeatureShortcutAvailability()
+                if !change.newValue { AISpellPanelController.shared.hide() }
+            }
+        }.store(in: &cancellables)
+
         Defaults.publisher(.enableColorPickerFeature, options: []).sink { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.updateFeatureShortcutAvailability()
@@ -1473,6 +1484,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        KeyboardShortcuts.onKeyUp(for: .aiSpellsPanel) { [weak self] in
+            guard let self, !self.windowsHiddenForLock,
+                  Defaults[.enableShortcuts], Defaults[.enableAISpells] else { return }
+            AISpellPanelController.shared.toggle()
+        }
+
         KeyboardShortcuts.onKeyDown(for: .colorPickerPanel) {
             guard Defaults[.enableShortcuts], Defaults[.enableColorPickerFeature] else { return }
             ColorPickerPanelManager.shared.toggleColorPickerPanel()
@@ -1535,6 +1552,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateFeatureShortcutAvailability() {
         updateShortcut(.startDemoTimer, isEnabled: Defaults[.enableShortcuts] && Defaults[.enableTimerFeature])
         updateShortcut(.clipboardHistoryPanel, isEnabled: Defaults[.enableShortcuts] && Defaults[.enableClipboardManager])
+        updateShortcut(.aiSpellsPanel, isEnabled: Defaults[.enableShortcuts] && Defaults[.enableAISpells])
         updateShortcut(.colorPickerPanel, isEnabled: Defaults[.enableShortcuts] && Defaults[.enableColorPickerFeature])
         updateShortcut(.screenAssistantPanel, isEnabled: Defaults[.enableShortcuts] && Defaults[.enableScreenAssistant])
         updateShortcut(.toggleTerminalTab, isEnabled: Defaults[.enableShortcuts] && Defaults[.enableTerminalFeature])

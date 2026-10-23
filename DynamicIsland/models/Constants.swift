@@ -1364,6 +1364,9 @@ extension Defaults.Keys {
     static let persistClipboardHistory = Key<Bool>("persistClipboardHistory", default: true)
     static let showClipboardIcon = Key<Bool>("showClipboardIcon", default: true)
     static let clipboardDisplayMode = Key<ClipboardDisplayMode>("clipboardDisplayMode", default: .panel)
+
+    // MARK: AI Spells (independent of clipboard history and AI providers)
+    static let enableAISpells = Key<Bool>("toolisle.aiSpells.enabled", default: true)
     
     // MARK: Screen Assistant Feature
     static let enableScreenAssistant = Key<Bool>("enableScreenAssistant", default: true)

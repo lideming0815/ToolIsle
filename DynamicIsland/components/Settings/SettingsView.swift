@@ -61,6 +61,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case battery
     case stats
     case clipboard
+    case aiSpells
     case screenAssistant
     case colorPicker
     case downloads
@@ -78,7 +79,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general, .appearance:                                          return .core
         case .media, .liveActivities, .lockScreen, .devices:                 return .mediaAndDisplay
         case .hudAndOSD, .menuBar, .battery:                                 return .system
-        case .timer, .calendar, .notes:                                      return .productivity
+        case .timer, .calendar, .notes, .aiSpells:                            return .productivity
         case .clipboard, .screenAssistant, .colorPicker, .shelf,
              .downloads, .shortcuts:                                         return .utilities
         case .stats, .terminal:                                              return .developer
@@ -104,6 +105,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .battery: return String(localized: "Battery")
         case .stats: return String(localized: "Stats")
         case .clipboard: return String(localized: "Clipboard")
+        case .aiSpells: return "AI 咒语"
         case .screenAssistant: return String(localized: "Screen Assistant")
         case .colorPicker: return String(localized: "Color Picker")
         case .downloads: return String(localized: "Downloads")
@@ -132,6 +134,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .battery: return "battery.100.bolt"
         case .stats: return "chart.xyaxis.line"
         case .clipboard: return "clipboard"
+        case .aiSpells: return "text.badge.star"
         case .screenAssistant: return "brain.head.profile"
         case .colorPicker: return "eyedropper"
         case .downloads: return "square.and.arrow.down"
@@ -160,6 +163,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .battery: return Color(red: 0.202, green: 0.783, blue: 0.348, opacity: 1.000)
         case .stats: return .teal
         case .clipboard: return .mint
+        case .aiSpells: return .indigo
         case .screenAssistant: return .pink
         case .colorPicker: return .accentColor
         case .downloads: return .gray
@@ -465,6 +469,10 @@ private enum SettingsSearchIndex {
         SettingsSearchEntry(tab: .clipboard, title: "Save History Across Restarts", keywords: ["clipboard", "history", "save", "persist", "privacy", "disk", "disable"], highlightID: SettingsTab.clipboard.highlightID(for: "Enable Clipboard Manager")),
         SettingsSearchEntry(tab: .clipboard, title: "Display Mode", keywords: ["list", "grid", "clipboard"], highlightID: SettingsTab.clipboard.highlightID(for: "Display Mode")),
         SettingsSearchEntry(tab: .clipboard, title: "History Size", keywords: ["history", "clipboard"], highlightID: SettingsTab.clipboard.highlightID(for: "History Size")),
+
+        // AI Spells
+        SettingsSearchEntry(tab: .aiSpells, title: "AI 咒语", keywords: ["prompt", "prompts", "提示词", "咒语", "分类", "收藏", "导入", "导出"], highlightID: nil),
+        SettingsSearchEntry(tab: .aiSpells, title: "AI 咒语快捷键", keywords: ["shortcut", "keyboard", "快捷键", "呼出"], highlightID: nil),
 
         // Screen Assistant
         SettingsSearchEntry(tab: .screenAssistant, title: "Enable Screen Assistant", keywords: ["screen assistant", "ai"], highlightID: SettingsTab.screenAssistant.highlightID(for: "Enable Screen Assistant")),
@@ -1116,6 +1124,10 @@ struct SettingsView: View {
         case .clipboard:
             SettingsForm(tab: .clipboard) {
                 ClipboardSettings()
+            }
+        case .aiSpells:
+            SettingsForm(tab: .aiSpells) {
+                AISpellSettingsView()
             }
         case .screenAssistant:
             SettingsForm(tab: .screenAssistant) {
@@ -7112,6 +7124,7 @@ private func copyLatestCrashReport() {
 struct Shortcuts: View {
     @Default(.enableTimerFeature) var enableTimerFeature
     @Default(.enableClipboardManager) var enableClipboardManager
+    @Default(.enableAISpells) var enableAISpells
     @Default(.enableShortcuts) var enableShortcuts
     @Default(.enableStatsFeature) var enableStatsFeature
     @Default(.enableColorPickerFeature) var enableColorPickerFeature
@@ -7232,6 +7245,22 @@ struct Shortcuts: View {
                     .multilineTextAlignment(.trailing)
                     .foregroundStyle(.secondary)
                     .font(.caption)
+                }
+
+                Section {
+                    KeyboardShortcuts.Recorder("呼出 AI 咒语：", name: .aiSpellsPanel)
+                        .disabled(!enableShortcuts || !enableAISpells)
+                    if !enableAISpells {
+                        Text("请先在 AI 咒语设置中启用此功能。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("AI 咒语")
+                } footer: {
+                    Text("默认 ⌃⌥P。打开独立咒语库，搜索后按回车复制，⌘↩ 粘贴到原应用。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {
