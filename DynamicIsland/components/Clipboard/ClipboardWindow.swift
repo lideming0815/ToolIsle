@@ -204,38 +204,46 @@ struct ClipboardWindowItemRow: View {
     
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            // Type icon
-            Image(systemName: item.type.icon)
-                .font(.system(size: 14))
-                .foregroundColor(.blue)
-                .frame(width: 20)
+            HStack(alignment: .top, spacing: 10) {
+                // Type icon
+                Image(systemName: item.type.icon)
+                    .font(.system(size: 14))
+                    .foregroundColor(.blue)
+                    .frame(width: 20)
             
-            // Content
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.preview)
-                    .font(.system(size: 12))
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                // Content
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.preview)
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 
-                HStack {
-                    Text(item.type.displayName)
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                    HStack {
+                        Text(item.type.displayName)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
                     
-                    Spacer()
+                        Spacer()
                     
-                    Text(timeAgoString(from: item.timestamp))
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                        Text(timeAgoString(from: item.timestamp))
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
                 }
+            
+                Spacer()
             }
-            
-            Spacer()
-            
+            .contentShape(Rectangle())
+            .onTapGesture {
+                clipboardManager.copyToClipboard(item)
+            }
+
             // Action buttons (shown on hover)
             if isHovering {
                 HStack(spacing: 6) {
+                    AISpellClipboardCaptureButton(item: item)
+
                     // Pin/Unpin button
                     Button(action: {
                         clipboardManager.togglePin(for: item)
@@ -282,9 +290,6 @@ struct ClipboardWindowItemRow: View {
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
-        }
-        .onTapGesture {
-            clipboardManager.copyToClipboard(item)
         }
     }
     

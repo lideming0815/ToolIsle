@@ -24,6 +24,7 @@ final class AISpellPanelController: NSObject, ObservableObject, NSWindowDelegate
     }
 
     private let quickState = AISpellQuickState()
+    private let managerState = AISpellManagerState()
     private var quickPanel: AISpellPanel?
     private var managerPanel: AISpellPanel?
     private var quickTarget: Target?
@@ -96,17 +97,52 @@ final class AISpellPanelController: NSObject, ObservableObject, NSWindowDelegate
         panel.titlebarAppearsTransparent = true
         panel.minSize = NSSize(width: 660, height: 440)
         panel.contentView = FirstMouseHostingView(rootView: AISpellsView(
-            store: AISpellStore.shared,
+            store: AISpellStore.shared, state: managerState,
             onCopy: { [weak self, weak panel] in self?.use($0, insert: false, from: panel) },
             onPaste: { [weak self, weak panel] in self?.use($0, insert: true, from: panel) },
             onClose: { [weak self, weak panel] in
                 if let panel { self?.dismiss(panel, returnFocus: true) }
-            }
+            },
+            onCapture: { [weak self] in self?.captureCurrentClipboard() }
         ))
         position(panel, size: NSSize(width: 820, height: 560))
         managerPanel = panel
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// The request is consumed by the manager after any existing editor closes.
+    /// Keeping the draft in the manager avoids silently saving or replacing text.
+    func captureClipboardText(_ text: String) {
+        guard Defaults[.enableAISpells] else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            showCaptureMessage("剪切板中没有可收藏的文字。")
+            return
+        }
+        _ = managerState.requestCapture(text)
+        // The legacy clipboard window can be above a floating manager. Close
+        // just the clipboard surfaces synchronously before presenting the editor.
+        ClipboardPanelManager.shared.hideClipboardPanel()
+        ClipboardWindowManager.shared.hideClipboardWindow()
+        showManager()
+    }
+
+    func captureCurrentClipboard() {
+        guard Defaults[.enableAISpells] else { return }
+        guard let text = AISpellClipboardCapture.currentText() else {
+            showCaptureMessage("当前剪切板没有可收藏的文字，请先复制一段文字。")
+            return
+        }
+        captureClipboardText(text)
+    }
+
+    private func showCaptureMessage(_ message: String) {
+        if quickPanel?.isVisible == true {
+            quickState.message = message
+        } else {
+            managerState.message = message
+            showManager()
+        }
     }
 
     func toggle() {
@@ -145,7 +181,7 @@ final class AISpellPanelController: NSObject, ObservableObject, NSWindowDelegate
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         // Deliberately exclude prompt bodies, clipboard values, and input field contents.
         let information = """
-        BangsBuddy AI Spells / clipboard-panel-v2
+        BangsBuddy AI Spells / capture-contexts-v3
         Version: \(version) (\(build))
         Bundle: \(bundle.bundleIdentifier ?? "?")
         Application: \(bundle.bundleURL.path)
@@ -192,7 +228,8 @@ final class AISpellPanelController: NSObject, ObservableObject, NSWindowDelegate
             onClose: { [weak self, weak panel] in
                 if let panel { self?.dismiss(panel, returnFocus: true) }
             },
-            onOpenPermissions: { [weak self] in self?.openAccessibilitySettings() }
+            onOpenPermissions: { [weak self] in self?.openAccessibilitySettings() },
+            onCapture: { [weak self] in self?.captureCurrentClipboard() }
         ).clipShape(RoundedRectangle(cornerRadius: 14)))
         position(panel, size: NSSize(width: 440, height: 500))
         quickPanel = panel

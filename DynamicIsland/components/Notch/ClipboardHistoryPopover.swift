@@ -116,47 +116,56 @@ struct ClipboardHistoryPopover: View {
 
 struct ClipboardItemRow: View {
     let item: ClipboardItem
-    let onCopy: () -> Void
+    let onDismiss: () -> Void
     @ObservedObject var clipboardManager = ClipboardManager.shared
     @State private var isHovering = false
     
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            // Type icon
-            Image(systemName: item.type.icon)
-                .font(.system(size: 12))
-                .foregroundColor(.blue)
-                .frame(width: 16)
+            HStack(alignment: .top, spacing: 10) {
+                // Type icon
+                Image(systemName: item.type.icon)
+                    .font(.system(size: 12))
+                    .foregroundColor(.blue)
+                    .frame(width: 16)
             
-            // Content
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.preview)
-                    .font(.system(size: 11))
-                    .foregroundColor(.white)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                // Content
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.preview)
+                        .font(.system(size: 11))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 
-                HStack {
-                    Text(item.type.displayName)
-                        .font(.system(size: 9))
-                        .foregroundColor(.gray)
+                    HStack {
+                        Text(item.type.displayName)
+                            .font(.system(size: 9))
+                            .foregroundColor(.gray)
                     
-                    Spacer()
+                        Spacer()
                     
-                    Text(timeAgoString(from: item.timestamp))
-                        .font(.system(size: 9))
-                        .foregroundColor(.gray)
+                        Text(timeAgoString(from: item.timestamp))
+                            .font(.system(size: 9))
+                            .foregroundColor(.gray)
+                    }
                 }
+            
+                Spacer()
             }
-            
-            Spacer()
-            
+            .contentShape(Rectangle())
+            .onTapGesture {
+                clipboardManager.copyToClipboard(item)
+                onDismiss()
+            }
+
             // Action buttons (shown on hover)
             if isHovering {
                 HStack(spacing: 4) {
+                    AISpellClipboardCaptureButton(item: item, beforeCapture: onDismiss)
+
                     Button(action: {
                         clipboardManager.copyToClipboard(item)
-                        onCopy()
+                        onDismiss()
                     }) {
                         Image(systemName: "doc.on.doc")
                             .font(.system(size: 10))
@@ -182,10 +191,6 @@ struct ClipboardItemRow: View {
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering
             }
-        }
-        .onTapGesture {
-            clipboardManager.copyToClipboard(item)
-            onCopy()
         }
     }
     

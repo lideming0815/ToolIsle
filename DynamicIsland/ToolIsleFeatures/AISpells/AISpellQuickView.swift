@@ -25,6 +25,7 @@ struct AISpellQuickView: View {
     let onManage: () -> Void
     let onClose: () -> Void
     let onOpenPermissions: () -> Void
+    var onCapture: (() -> Void)? = nil
 
     @State private var query = ""
     @State private var filter = Filter.all
@@ -34,6 +35,7 @@ struct AISpellQuickView: View {
     private enum Filter: Hashable {
         case all
         case favorites
+        case kind(AISpellKind)
         case category(String)
     }
 
@@ -45,6 +47,7 @@ struct AISpellQuickView: View {
         switch filter {
         case .all: return store.results(query: query)
         case .favorites: return store.results(query: query, favoritesOnly: true)
+        case .kind(let kind): return store.results(query: query).filter { $0.kind == kind }
         case .category(let category): return store.results(query: query, category: category)
         }
     }
@@ -91,12 +94,20 @@ struct AISpellQuickView: View {
             Text("AI 咒语").font(.headline)
             Text("\(matches.count)").font(.caption).foregroundStyle(.secondary)
             Spacer()
+            if let onCapture {
+                Button(action: onCapture) { Image(systemName: "doc.badge.plus") }
+                    .buttonStyle(.borderless)
+                    .disabled(state.isBusy || store.isReadOnly)
+                    .help("收藏当前剪切板中的文字")
+                    .accessibilityLabel("收藏剪切板")
+                    .accessibilityIdentifier("ai-spell-quick-capture")
+            }
             Button(action: onManage) {
                 Label("管理", systemImage: "slider.horizontal.3")
             }
             .buttonStyle(.borderless)
             .disabled(state.isBusy)
-            .help("管理咒语、分类与备份")
+            .help("管理咒语、项目背景、组合与备份")
             .accessibilityIdentifier("ai-spell-quick-manage")
         }
         .padding(.horizontal, 15)
@@ -109,6 +120,8 @@ struct AISpellQuickView: View {
             HStack(spacing: 6) {
                 filterButton("全部", filter: .all)
                 filterButton("收藏", filter: .favorites, icon: "star")
+                filterButton("背景卡", filter: .kind(.context), icon: AISpellKind.context.systemImage)
+                filterButton("组合", filter: .kind(.combination), icon: AISpellKind.combination.systemImage)
                 ForEach(categories, id: \.self) { category in
                     filterButton(category.isEmpty ? "未分类" : category, filter: .category(category))
                 }
@@ -185,6 +198,10 @@ struct AISpellQuickView: View {
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
+                    if spell.kind != .prompt {
+                        Image(systemName: spell.kind.systemImage).font(.caption).foregroundStyle(Color.accentColor)
+                            .accessibilityLabel(spell.kind.title)
+                    }
                     Text(spell.title).font(.callout.weight(.semibold)).lineLimit(1)
                     if spell.isFavorite {
                         Image(systemName: "star.fill").font(.caption2).foregroundStyle(.orange)

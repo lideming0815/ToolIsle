@@ -1,30 +1,64 @@
 // ToolIsle AI spells. Copyright (C) 2026 ToolIsle contributors.
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
+
+struct AISpellCaptureRequest: Identifiable {
+    let id = UUID()
+    let content: String
+}
+
+/// Keeps one explicit capture waiting while an existing editor or file panel is open.
+/// It owns no clipboard access and does not save until the user confirms the editor.
+@MainActor
+final class AISpellManagerState: ObservableObject {
+    @Published var captureRequest: AISpellCaptureRequest?
+    @Published var message: String?
+
+    @discardableResult
+    func requestCapture(_ content: String) -> Bool {
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "剪切板中没有可以收藏的文字。"
+            return false
+        }
+        guard captureRequest == nil else {
+            message = "已有一段文字等待收藏，请先完成当前编辑。"
+            return false
+        }
+        captureRequest = AISpellCaptureRequest(content: content)
+        message = nil
+        return true
+    }
+}
 
 /// The same library is used for quick retrieval and editing. Only prompt content
 /// crosses the copy/paste callbacks; titles and categories stay in the library.
 @MainActor
 struct AISpellsView: View {
     @ObservedObject var store: AISpellStore
+    @ObservedObject var state: AISpellManagerState
     let onCopy: (AISpell) -> Void
     let onPaste: (AISpell) -> Void
     let onClose: () -> Void
+    var onCapture: (() -> Void)? = nil
 
     @State private var query = ""
     @State private var category: String?
     @State private var favoritesOnly = false
+    @State private var kind: AISpellKind?
     @State private var selection: UUID?
     @State private var editingSpell: AISpell?
     @State private var deletingSpell: AISpell?
     @State private var statusMessage: String?
     @State private var focusRequest = UUID()
     @State private var isShowingFilePanel = false
+    @State private var capturedDraftID: UUID?
 
     private var matches: [AISpell] {
         store.results(query: query, category: category, favoritesOnly: favoritesOnly)
+            .filter { kind == nil || $0.kind == kind }
     }
     private var visibleIDs: [UUID] { matches.map(\.id) }
     private var selectedSpell: AISpell? { matches.first { $0.id == selection } }
@@ -51,7 +85,16 @@ struct AISpellsView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .frame(minWidth: 620, minHeight: 420)
-        .onAppear { reconcileSelection() }
+        .onAppear { reconcileSelection(); consumeCaptureRequest() }
+        .onChange(of: state.captureRequest?.id) { _, _ in consumeCaptureRequest() }
+        .onChange(of: isShowingFilePanel) { _, showing in
+            if !showing { consumeCaptureRequest() }
+        }
+        .onChange(of: deletingSpell?.id) { _, id in
+            if id == nil {
+                DispatchQueue.main.async { consumeCaptureRequest() }
+            }
+        }
         .onChange(of: visibleIDs) { _, _ in reconcileSelection() }
         .onChange(of: categories) { _, categories in
             if let category, !categories.contains(category) { self.category = nil }
@@ -59,14 +102,20 @@ struct AISpellsView: View {
         .onChange(of: editingSpell?.id) { _, id in
             if id == nil { focusRequest = UUID() }
         }
-        .sheet(item: $editingSpell) { spell in
+        .sheet(item: $editingSpell, onDismiss: consumeCaptureRequest) { spell in
             AISpellEditor(spell: spell, store: store) { editingSpell = nil } onSave: { draft in
-                if store.save(draft) {
-                    query = ""
-                    category = nil
-                    favoritesOnly = false
-                    selection = draft.id
+                if capturedDraftID == draft.id,
+                   let existing = store.matchingContent(draft.content), existing.id != draft.id {
+                    reveal(existing)
+                    statusMessage = "已存在相同正文：“\(existing.title)”，没有重复保存。"
                     editingSpell = nil
+                    capturedDraftID = nil
+                    return
+                }
+                if store.save(draft) {
+                    reveal(draft)
+                    editingSpell = nil
+                    capturedDraftID = nil
                     statusMessage = "已保存"
                 }
             }
@@ -83,7 +132,7 @@ struct AISpellsView: View {
             }
             Button("取消", role: .cancel) { deletingSpell = nil }
         } message: {
-            Text("“\(deletingSpell?.title ?? "")”将从本机咒语库中移除。删除前可先导出备份。")
+            Text("“\(deletingSpell?.title ?? "")”将从本机咒语库中移除。已保存组合中的正文仍会保留。删除前可先导出备份。")
         }
     }
 
@@ -92,7 +141,7 @@ struct AISpellsView: View {
             Image(systemName: "wand.and.stars").font(.title3).foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text("AI 咒语").font(.headline)
-                Text("常用提示词，随时取用").font(.caption).foregroundStyle(.secondary)
+                Text("咒语、项目背景与预设组合").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             Button { edit(AISpell(title: "", content: "")) } label: {
@@ -101,6 +150,27 @@ struct AISpellsView: View {
             .disabled(store.isReadOnly || editingSpell != nil)
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityIdentifier("ai-spells-new")
+            Button {
+                edit(AISpell(title: "", content: "", kind: .context))
+            } label: {
+                Label("背景卡", systemImage: AISpellKind.context.systemImage)
+            }
+            .disabled(store.isReadOnly || editingSpell != nil)
+            .accessibilityIdentifier("ai-spells-new-context")
+            Button {
+                edit(AISpell(title: "", content: "", kind: .combination))
+            } label: {
+                Label("组合", systemImage: AISpellKind.combination.systemImage)
+            }
+            .disabled(store.isReadOnly || editingSpell != nil)
+            .accessibilityIdentifier("ai-spells-new-combination")
+            if let onCapture {
+                Button(action: onCapture) { Image(systemName: "doc.badge.plus") }
+                    .disabled(store.isReadOnly)
+                    .help("收藏当前剪切板中的文字")
+                    .accessibilityLabel("收藏剪切板")
+                    .accessibilityIdentifier("ai-spells-capture")
+            }
             Menu {
                 Button("导入备份…", action: importLibrary).disabled(store.isReadOnly)
                 Button("导出备份…", action: exportLibrary).disabled(store.isReadOnly)
@@ -126,6 +196,15 @@ struct AISpellsView: View {
             )
             .frame(height: 28)
             HStack(spacing: 12) {
+                Picker("类型", selection: $kind) {
+                    Text("全部类型").tag(nil as AISpellKind?)
+                    ForEach(AISpellKind.allCases) { value in
+                        Text(value.title).tag(Optional(value))
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 130)
+                .accessibilityLabel("按类型筛选")
                 Picker("分类", selection: $category) {
                     Text("全部分类").tag(nil as String?)
                     ForEach(categories, id: \.self) { category in
@@ -165,7 +244,8 @@ struct AISpellsView: View {
                                 Text(spell.title).font(.body.weight(.medium)).lineLimit(2)
                                 Text(spell.content.replacingOccurrences(of: "\n", with: " "))
                                     .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                                Text(spell.category.isEmpty ? "未分类" : spell.category)
+                                Label(spell.kind.title + (spell.category.isEmpty ? "" : " · " + spell.category),
+                                      systemImage: spell.kind.systemImage)
                                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer(minLength: 0)
@@ -211,7 +291,8 @@ struct AISpellsView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(spell.title).font(.title3.weight(.semibold)).textSelection(.enabled)
-                        Text(spell.category.isEmpty ? "未分类" : spell.category)
+                        Label(spell.kind.title + (spell.category.isEmpty ? "" : " · " + spell.category),
+                              systemImage: spell.kind.systemImage)
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
@@ -233,6 +314,10 @@ struct AISpellsView: View {
                         .accessibilityLabel("删除咒语")
                 }
                 Divider()
+                if spell.kind == .combination {
+                    Text("由 \(spell.components.count) 个片段组成 · 按保存时的正文插入")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 ScrollView {
                     Text(spell.content)
                         .font(.body)
@@ -260,8 +345,8 @@ struct AISpellsView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("↑↓ 选择 · ↩ 复制 · ⌘↩ 插入").font(.caption).foregroundStyle(.secondary)
-                if let statusMessage {
-                    Text(statusMessage).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                if let message = state.message ?? statusMessage {
+                    Text(message).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
             Spacer(minLength: 4)
@@ -314,7 +399,35 @@ struct AISpellsView: View {
     private func edit(_ spell: AISpell) {
         guard !store.isReadOnly else { return }
         store.errorMessage = nil
+        capturedDraftID = nil
         editingSpell = spell
+    }
+
+    private func reveal(_ spell: AISpell) {
+        query = ""
+        category = nil
+        kind = nil
+        favoritesOnly = false
+        selection = spell.id
+    }
+
+    private func consumeCaptureRequest() {
+        guard acceptsQuickActions, let request = state.captureRequest else { return }
+        state.captureRequest = nil
+        guard !store.isReadOnly else {
+            state.message = "咒语库暂不可写，请先处理读取错误。剪切板内容未改变。"
+            return
+        }
+        state.message = nil
+        if let existing = store.matchingContent(request.content) {
+            reveal(existing)
+            statusMessage = "已存在相同正文：“\(existing.title)”，没有重复保存。"
+        } else {
+            let draft = AISpell(title: AISpellLibrary.suggestedTitle(for: request.content), content: request.content)
+            capturedDraftID = draft.id
+            store.errorMessage = nil
+            editingSpell = draft
+        }
     }
 
     private func importLibrary() {
@@ -332,7 +445,7 @@ struct AISpellsView: View {
                 let data = try Data(contentsOf: url, options: .mappedIfSafe)
                 if let count = store.importData(data) {
                     statusMessage = "已导入 \(count) 条咒语，已有记录保持不变。"
-                    query = ""; category = nil; favoritesOnly = false
+                    query = ""; category = nil; kind = nil; favoritesOnly = false
                 }
             } catch {
                 store.errorMessage = "无法读取备份：\(error.localizedDescription)"
@@ -366,85 +479,6 @@ struct AISpellsView: View {
         } else {
             panel.begin(completionHandler: completion)
         }
-    }
-}
-
-@MainActor
-private struct AISpellEditor: View {
-    let spell: AISpell
-    @ObservedObject var store: AISpellStore
-    let onCancel: () -> Void
-    let onSave: (AISpell) -> Void
-    @State private var title: String
-    @State private var content: String
-    @State private var category: String
-    @FocusState private var titleFocused: Bool
-
-    init(spell: AISpell, store: AISpellStore, onCancel: @escaping () -> Void, onSave: @escaping (AISpell) -> Void) {
-        self.spell = spell
-        self.store = store
-        self.onCancel = onCancel
-        self.onSave = onSave
-        _title = State(initialValue: spell.title)
-        _content = State(initialValue: spell.content)
-        _category = State(initialValue: spell.category)
-    }
-
-    private var canSave: Bool {
-        !store.isReadOnly && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(store.spells.contains(where: { $0.id == spell.id }) ? "编辑咒语" : "新建咒语")
-                .font(.title3.weight(.semibold))
-            TextField("标题，例如：检查最大的遗漏", text: $title)
-                .textFieldStyle(.roundedBorder).focused($titleFocused)
-                .accessibilityLabel("咒语标题")
-            HStack {
-                TextField("分类（选填）", text: $category).textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("咒语分类")
-                if !store.categories.isEmpty {
-                    Menu("已有分类") {
-                        ForEach(store.categories, id: \.self) { value in
-                            Button(value.isEmpty ? "未分类" : value) { category = value }
-                        }
-                    }.fixedSize()
-                }
-            }
-            Text("正文").font(.caption).foregroundStyle(.secondary)
-            TextEditor(text: $content)
-                .font(.body)
-                .frame(minHeight: 220)
-                .padding(6)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.25)))
-                .accessibilityLabel("咒语正文")
-                .accessibilityIdentifier("ai-spells-editor-content")
-            Text("保留原文和换行；复制、插入时只使用这里的正文。")
-                .font(.caption).foregroundStyle(.secondary)
-            if let error = store.errorMessage {
-                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-            }
-            HStack {
-                Spacer()
-                Button("取消", action: onCancel).keyboardShortcut(.cancelAction)
-                Button("保存") {
-                    var draft = spell
-                    draft.title = title
-                    draft.content = content
-                    draft.category = category
-                    onSave(draft)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canSave)
-                .accessibilityIdentifier("ai-spells-save")
-            }
-        }
-        .padding(22)
-        .frame(minWidth: 500, idealWidth: 560, minHeight: 420, idealHeight: 490)
-        .onAppear { titleFocused = true }
-        .onExitCommand(perform: onCancel)
     }
 }
 

@@ -2,12 +2,16 @@ name: AI spells validation and BangsBuddy package
 
 on:
   push:
-    branches: [dev, "feat/ai-spells-manager", "fix/ai-spells-quick-paste"]
+    branches: [dev, "feat/ai-spells-manager", "fix/ai-spells-quick-paste", "feat/ai-spells-capture-contexts"]
     paths:
       - 'DynamicIsland/ToolIsleFeatures/AISpells/**'
       - 'DynamicIsland/DynamicIslandApp.swift'
       - 'DynamicIsland/Shortcuts/ShortcutConstants.swift'
       - 'DynamicIsland/components/Settings/SettingsView.swift'
+      - 'DynamicIsland/components/Clipboard/**'
+      - 'DynamicIsland/components/Notch/ClipboardHistoryPopover.swift'
+      - 'DynamicIsland/components/Notch/NotchClipboardView.swift'
+      - 'DynamicIsland/managers/ClipboardPanelManager.swift'
       - 'DynamicIsland/models/Constants.swift'
       - 'tests/AISpellLibraryRegression.swift'
       - 'tests/AISpellInsertionRegression.swift'
@@ -19,6 +23,10 @@ on:
   pull_request:
     paths:
       - 'DynamicIsland/ToolIsleFeatures/AISpells/**'
+      - 'DynamicIsland/components/Clipboard/**'
+      - 'DynamicIsland/components/Notch/ClipboardHistoryPopover.swift'
+      - 'DynamicIsland/components/Notch/NotchClipboardView.swift'
+      - 'DynamicIsland/managers/ClipboardPanelManager.swift'
       - 'tests/AISpellLibraryRegression.swift'
       - 'tests/AISpellInsertionRegression.swift'
       - 'tests/AISpellQuickViewRegression.swift'
@@ -56,7 +64,7 @@ jobs:
         run: |
           sudo xcodebuild -runFirstLaunch
           sudo xcodebuild -downloadComponent MetalToolchain
-      - name: Run native quick-view interaction regressions
+      - name: Run native capture, combination and quick-view regressions
         run: bash scripts/test_ai_spell_interaction.sh "$RUNNER_TEMP/ai-spells-interaction"
       - name: Build complete BangsBuddy DMG with existing release recipe
         run: bash publish/publish.sh
@@ -64,7 +72,7 @@ jobs:
         if: always()
         with:
           name: AI-Spells-Quick-View
-          path: ${{ runner.temp }}/ai-spells-interaction/ai-spells-quick-panel.png
+          path: ${{ runner.temp }}/ai-spells-interaction/*.png
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@v4

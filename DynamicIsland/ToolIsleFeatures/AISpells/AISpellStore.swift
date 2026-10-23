@@ -31,6 +31,10 @@ final class AISpellStore: ObservableObject {
         library?.results(query: query, category: category, favoritesOnly: favoritesOnly) ?? []
     }
 
+    func matchingContent(_ content: String) -> AISpell? {
+        library?.matchingContent(content)
+    }
+
     func reload() {
         do {
             library = try AISpellLibrary(fileURL: fileURL)
@@ -80,6 +84,7 @@ final class AISpellStore: ObservableObject {
             errorMessage = nil
             return added
         } catch {
+            protectChangedLibrary(error)
             errorMessage = "导入失败，现有咒语未改变。\n\(error.localizedDescription)"
             return nil
         }
@@ -93,8 +98,17 @@ final class AISpellStore: ObservableObject {
             errorMessage = nil
             return true
         } catch {
+            protectChangedLibrary(error)
             errorMessage = "保存失败，现有咒语未改变。\n\(error.localizedDescription)"
             return false
+        }
+    }
+
+    private func protectChangedLibrary(_ error: Error) {
+        if let libraryError = error as? AISpellLibraryError,
+           case .libraryChangedDuringMigration = libraryError {
+            library = nil
+            isReadOnly = true
         }
     }
 }

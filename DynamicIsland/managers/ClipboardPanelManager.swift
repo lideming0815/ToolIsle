@@ -42,7 +42,8 @@ class ClipboardPanelManager: ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
         
         // Ensure the panel becomes the key window for text input
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak panel] in
+            guard let panel, panel.isVisible else { return }
             panel.makeKey()
         }
     }
