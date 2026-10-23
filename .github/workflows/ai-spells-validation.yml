@@ -2,7 +2,7 @@ name: AI spells validation and BangsBuddy package
 
 on:
   push:
-    branches: [dev, "feat/ai-spells-manager", "fix/ai-spells-quick-paste", "feat/ai-spells-capture-contexts"]
+    branches: [dev, "feat/ai-spells-manager", "fix/ai-spells-quick-paste"]
     paths:
       - 'DynamicIsland/ToolIsleFeatures/AISpells/**'
       - 'DynamicIsland/DynamicIslandApp.swift'

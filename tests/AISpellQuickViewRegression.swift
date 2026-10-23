@@ -250,11 +250,19 @@ struct AISpellQuickViewRegression {
         }
         try expect(window.makeFirstResponder(search), "Management search can become first responder")
         pumpEvents(for: 0.1)
+        let duplicateFocusBefore = focusDescription(search: search, window: window)
+        try snapshotIfRequested(hosting, name: "ai-spells-duplicate-before.png")
         postKey(.keyDown, code: 36, characters: "\r", modifiers: [], window: window)
         postKey(.keyUp, code: 36, characters: "\r", modifiers: [], window: window)
         pumpEvents(for: 0.2)
+        try snapshotIfRequested(hosting, name: "ai-spells-duplicate.png")
+        let duplicateDiagnostics = "expected=\(duplicate.id.uuidString); " +
+            "copied(\(recorder.copied.count))=\(recorder.copied.map { $0.id.uuidString }); " +
+            "pasted(\(recorder.pasted.count))=\(recorder.pasted.map { $0.id.uuidString }); " +
+            "before={\(duplicateFocusBefore)}; after={\(focusDescription(search: search, window: window))}"
+        print("Duplicate capture Enter: \(duplicateDiagnostics)")
         try expect(recorder.copied.map(\.id) == [duplicate.id],
-                   "Duplicate capture selects the existing entry, verified through its public copy action")
+                   "Duplicate capture selects the existing entry, verified through its public copy action. " + duplicateDiagnostics)
 
         let initialDraft = "正在编辑的草稿\n这段内容尚未保存。"
         let editedDraft = "用户已经修改的草稿🙂\n新捕获不能覆盖这里。"
@@ -387,6 +395,20 @@ struct AISpellQuickViewRegression {
         }
         editor.insertText(query, replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         pumpEvents(for: 0.2)
+    }
+
+    private static func focusDescription(search: NSSearchField, window: NSWindow) -> String {
+        let editor = search.currentEditor() as? NSTextView
+        let responder = window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        let keyResponder = NSApp.keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+        return "window=\(window.title)#\(window.windowNumber), " +
+            "keyWindow=\(NSApp.keyWindow?.title ?? "nil")#\(NSApp.keyWindow?.windowNumber ?? -1), " +
+            "firstResponder=\(responder), keyFirstResponder=\(keyResponder), " +
+            "searchEditor=\(editor.map { String(describing: type(of: $0)) } ?? "nil"), " +
+            "editorIsFirstResponder=\(editor != nil && window.firstResponder === editor), " +
+            "markedText=\(editor?.hasMarkedText() ?? false), " +
+            "query=\(String(reflecting: search.stringValue)), " +
+            "attachedSheet=\(window.attachedSheet != nil)"
     }
 
     private static func editorSheet(of window: NSWindow) throws -> NSWindow {
