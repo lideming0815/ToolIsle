@@ -58,19 +58,25 @@ jobs:
           lfs: true
           persist-credentials: false
       - uses: maxim-lobanov/setup-xcode@v1
+        id: xcode
         with:
           xcode-version: latest-stable
       - name: Run isolated spell library and Store regressions
         run: bash scripts/test_ai_spells.sh
       - name: Run spell insertion contract regressions
+        if: ${{ !cancelled() && steps.xcode.outcome == 'success' }}
         run: bash scripts/test_ai_spell_insertion.sh
       - name: Run isolated pasteboard capture regressions
+        if: ${{ !cancelled() && steps.xcode.outcome == 'success' }}
         run: bash scripts/test_ai_spell_capture.sh
       - name: Prepare native toolchain
+        id: native-toolchain
+        if: ${{ !cancelled() && steps.xcode.outcome == 'success' }}
         run: |
           sudo xcodebuild -runFirstLaunch
           sudo xcodebuild -downloadComponent MetalToolchain
       - name: Run native capture, combination and quick-view regressions
+        if: ${{ !cancelled() && steps.native-toolchain.outcome == 'success' }}
         run: bash scripts/test_ai_spell_interaction.sh "$RUNNER_TEMP/ai-spells-interaction"
       - name: Build complete BangsBuddy DMG with existing release recipe
         run: bash publish/publish.sh

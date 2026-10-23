@@ -72,15 +72,32 @@ struct AISpellClipboardCaptureRegression {
         try expect(try readUnchanged(pasteboard) == original,
                    "Plain text has priority and is never replaced by a rich-text alternative")
 
-        let fileRepresentations: [NSPasteboard.PasteboardType] = [
-            .fileURL, NSPasteboard.PasteboardType("NSFilenamesPboardType")
-        ]
-        for type in fileRepresentations {
-            try load([(type, Data("file:///tmp/not-a-prompt.txt".utf8)),
-                      (.string, Data("/tmp/not-a-prompt.txt".utf8))], into: pasteboard)
-            try expect(try readUnchanged(pasteboard) == nil,
-                       "A file representation must not capture its accompanying path: \(type.rawValue)")
-        }
+        let fileURL = URL(fileURLWithPath: "/tmp/not-a-prompt.txt")
+        pasteboard.declareTypes([.fileURL, .string], owner: nil)
+        try expect(pasteboard.setString(fileURL.absoluteString, forType: .fileURL),
+                   "Create a valid file URL representation on the named pasteboard")
+        try expect(pasteboard.setString(fileURL.path, forType: .string),
+                   "Give the named file URL fixture its accompanying path text")
+        try expect(pasteboard.string(forType: .fileURL) == fileURL.absoluteString,
+                   "The modern file URL fixture round-trips its URL string")
+        try expect(try readUnchanged(pasteboard) == nil,
+                   "A file URL representation must not capture its accompanying path")
+
+        // The legacy filename list is a property list, not UTF-8 URL bytes.
+        // NSPasteboardItem accepts UTI types and rejects this old named type;
+        // use the legacy NSPasteboard declaration API that owns its encoding.
+        let filenamesType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+        pasteboard.declareTypes([filenamesType, .string], owner: nil)
+        try expect(pasteboard.setPropertyList([fileURL.path], forType: filenamesType),
+                   "Create a valid legacy filename property list on the named pasteboard")
+        try expect(pasteboard.setString(fileURL.path, forType: .string),
+                   "Give the legacy filename fixture its accompanying path text")
+        try expect(pasteboard.types?.contains(filenamesType) == true,
+                   "The legacy filename fixture declares the old type explicitly")
+        try expect((pasteboard.propertyList(forType: filenamesType) as? [String]) == [fileURL.path],
+                   "The legacy filename fixture round-trips its filename property list")
+        try expect(try readUnchanged(pasteboard) == nil,
+                   "A legacy filename representation must not capture its accompanying path")
 
         let imageRepresentations: [NSPasteboard.PasteboardType] = [
             .png, .tiff, NSPasteboard.PasteboardType("public.jpeg"),
