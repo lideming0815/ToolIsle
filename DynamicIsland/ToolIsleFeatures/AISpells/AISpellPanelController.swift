@@ -211,8 +211,8 @@ final class AISpellPanelController: NSObject, NSWindowDelegate {
 
                 guard AXIsProcessTrusted(),
                       let source = CGEventSource(stateID: .combinedSessionState),
-                      let down = CGEvent(source: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true),
-                      let up = CGEvent(source: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: false) else {
+                      let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true),
+                      let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: false) else {
                     self.explain("内容已复制", detail: "未能执行自动粘贴，请在目标输入框按 ⌘V。")
                     return
                 }
