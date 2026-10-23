@@ -74,7 +74,7 @@ bash scripts/test_ai_spell_insertion.sh
 bash scripts/test_ai_spell_interaction.sh /tmp/ai-spells-interaction
 ```
 
-该脚本编译生产 `AISpellQuickView` 与 AppKit 搜索框，使用隔离的样例库验证行按钮、搜索、回车插入、⌘↩ 复制、忙碌状态和管理入口，并可生成 `ai-spells-quick-panel.png` 原生视图截图。输入法保护通过真实 `NSTextView` 的 marked text 和生产委托检查，不能替代系统中文输入法端到端验收；其插入回调只记录调用，不等同于外部应用粘贴成功。
+该脚本编译生产 `AISpellQuickView` 与 AppKit 搜索框，使用隔离的样例库验证行按钮、搜索、回车插入、⌘↩ 复制、忙碌状态和管理入口，并可生成 `ai-spells-quick-panel.png` 原生视图截图。鼠标按下、抬起和键盘事件进入测试进程的 AppKit 队列，实际触发生产按钮和搜索框；点击位置以固定的 440×500 样例面板原生截图为准，不直接调用待测按钮回调。输入法保护通过真实 `NSTextView` 的 marked text 和生产委托检查，不能替代系统中文输入法端到端验收；其插入回调只记录调用，不等同于外部应用粘贴成功。
 
 完整发行包继续使用仓库既有流程：
 

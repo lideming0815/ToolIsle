@@ -3,8 +3,9 @@
 import AppKit
 import SwiftUI
 
-/// Exercises the production SwiftUI view and its AppKit search editor in this process.
-/// No system accessibility permission, clipboard write, or external-app paste is simulated.
+/// Exercises the production SwiftUI buttons and AppKit search editor through this
+/// process's actual event queue. No system accessibility permission, clipboard
+/// write, or external-app paste is simulated.
 @main
 @MainActor
 struct AISpellQuickViewRegression {
@@ -22,49 +23,6 @@ struct AISpellQuickViewRegression {
 
     private final class TestPanel: NSPanel {
         override var canBecomeKey: Bool { true }
-    }
-
-    /// SwiftUI can return AX nodes that adopt a role-specific protocol instead
-    /// of the complete NSAccessibilityProtocol. Use AppKit's public NSObject
-    /// accessibility bridge for those nodes; do not discard their descendants.
-    private struct AccessibleElement {
-        let object: NSObject
-
-        func identifier() -> String? {
-            if let element = object as? NSAccessibilityProtocol {
-                return element.accessibilityIdentifier()
-            }
-            if let element = object as? NSAccessibilityElementProtocol,
-               let value = element.accessibilityIdentifier?() { return value }
-            return object.accessibilityAttributeValue(.identifier) as? String
-        }
-
-        func children() -> [Any] {
-            if let element = object as? NSAccessibilityProtocol {
-                return element.accessibilityChildren() ?? []
-            }
-            return object.accessibilityAttributeValue(.children) as? [Any] ?? []
-        }
-
-        func accessibilityRole() -> NSAccessibility.Role? {
-            if let element = object as? NSAccessibilityProtocol {
-                return element.accessibilityRole()
-            }
-            guard let value = object.accessibilityAttributeValue(.role) as? String else { return nil }
-            return NSAccessibility.Role(rawValue: value)
-        }
-
-        func accessibilityPerformPress() -> Bool {
-            if let element = object as? NSAccessibilityProtocol {
-                return element.accessibilityPerformPress()
-            }
-            if let button = object as? NSAccessibilityButton {
-                return button.accessibilityPerformPress()
-            }
-            guard object.accessibilityActionNames().contains(.press) else { return false }
-            object.accessibilityPerformAction(.press)
-            return true
-        }
     }
 
     private static var assertions = 0
@@ -152,11 +110,9 @@ struct AISpellQuickViewRegression {
 
         try expect(hosting.bounds.width == 440 && hosting.bounds.height == 500,
                    "The quick view must fit the 440 by 500 panel")
-        let firstRow = try accessibleElement("ai-spell-quick-row-\(first.id.uuidString)", in: hosting)
-        try expect(firstRow.accessibilityRole() == .button, "Each quick row must be an actionable button")
-        try expect(firstRow.accessibilityPerformPress(), "A single row press must be accepted")
+        clickFirstPrompt(in: hosting, window: panel)
         pumpEvents(for: 0.1)
-        try expect(recorder.pasted.map(\.id) == [first.id], "One row press requests insertion exactly once")
+        try expect(recorder.pasted.map(\.id) == [first.id], "One native mouse click requests insertion exactly once")
         try expect(recorder.pasted.first?.content == first.content, "Insertion receives the complete original body")
         try expect(recorder.copied.isEmpty, "A row press must not invoke copy-only")
 
@@ -170,16 +126,15 @@ struct AISpellQuickViewRegression {
         }
         editor.insertText("unknowns", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
         pumpEvents(for: 0.2)
-        try expect(findAccessibleElement("ai-spell-quick-row-\(second.id.uuidString)", in: hosting) != nil,
-                   "Typing in the actual search editor finds full English body text")
-        try expect(findAccessibleElement("ai-spell-quick-row-\(first.id.uuidString)", in: hosting) == nil,
-                   "Search removes nonmatching rows from the native accessibility tree")
+        try expect(search.stringValue == "unknowns", "Typing updates the actual native search field")
+        try expect(recorder.pasted.count == 1 && recorder.copied.isEmpty,
+                   "Typing a query does not use a spell")
 
         postKey(.keyDown, code: 36, characters: "\r", modifiers: [], window: panel)
         postKey(.keyUp, code: 36, characters: "\r", modifiers: [], window: panel)
         pumpEvents(for: 0.2)
         try expect(recorder.pasted.map(\.id) == [first.id, second.id],
-                   "Return in search requests insertion of the filtered row exactly once")
+                   "Return finds full English body text and inserts only the matching row exactly once")
 
         postKey(.keyDown, code: 36, characters: "\r", modifiers: .command, window: panel)
         postKey(.keyUp, code: 36, characters: "\r", modifiers: .command, window: panel)
@@ -206,15 +161,17 @@ struct AISpellQuickViewRegression {
         pumpEvents(for: 0.2)
         state.isBusy = true
         pumpEvents(for: 0.1)
-        let busyRow = try accessibleElement("ai-spell-quick-row-\(first.id.uuidString)", in: hosting)
-        _ = busyRow.accessibilityPerformPress()
+        clickFirstPrompt(in: hosting, window: panel)
         pumpEvents(for: 0.1)
         try expect(recorder.pasted.count == 2, "A pending insertion prevents a second row action")
         state.isBusy = false
         pumpEvents(for: 0.1)
 
-        let manage = try accessibleElement("ai-spell-quick-manage", in: hosting)
-        try expect(manage.accessibilityPerformPress(), "The manage button is actionable")
+        // The 440 x 500 fixture's header places Manage at (397, 22) from
+        // the top left. Dispatch a real one-click mouse pair to that button.
+        let managePoint = NSPoint(x: hosting.bounds.minX + 397,
+                                  y: hosting.isFlipped ? hosting.bounds.minY + 22 : hosting.bounds.maxY - 22)
+        click(at: hosting.convert(managePoint, to: nil), window: panel)
         pumpEvents(for: 0.1)
         try expect(recorder.manageCount == 1, "Manage opens the management flow once")
         try expect(recorder.pasted.count == 2, "Opening management does not insert a spell")
@@ -231,51 +188,26 @@ struct AISpellQuickViewRegression {
         return nil
     }
 
-    private static func accessibleElement(_ id: String, in root: NSView) throws -> AccessibleElement {
-        guard let element = findAccessibleElement(id, in: root) else {
-            dumpAccessibilityTree(root)
-            throw Failure(description: "Native accessibility element not found: \(id)")
-        }
-        return element
+    private static func clickFirstPrompt(in root: NSView, window: NSWindow) {
+        // The native screenshot of this fixed 440 x 500 fixture places the
+        // first row at y = 127...203 from the top. Its center is (220, 165).
+        // The actual callback identity/count, not the coordinate, is the oracle.
+        let point = NSPoint(x: root.bounds.minX + 220,
+                            y: root.isFlipped ? root.bounds.minY + 165 : root.bounds.maxY - 165)
+        click(at: root.convert(point, to: nil), window: window)
     }
 
-    private static func findAccessibleElement(_ id: String, in root: NSView) -> AccessibleElement? {
-        var visited = Set<ObjectIdentifier>()
-        func visit(_ value: Any) -> AccessibleElement? {
-            guard let object = value as? NSObject else { return nil }
-            guard visited.insert(ObjectIdentifier(object)).inserted else { return nil }
-            let element = AccessibleElement(object: object)
-            if element.identifier() == id { return element }
-            for child in element.children() {
-                if let found = visit(child) { return found }
-            }
-            if let view = value as? NSView {
-                for child in view.subviews {
-                    if let found = visit(child) { return found }
-                }
-            }
-            return nil
+    private static func click(at point: NSPoint, window: NSWindow) {
+        // Queue both events before pumping: AppKit button tracking may consume
+        // the mouse-up synchronously. These events stay within this test app.
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0
+            )!
+            NSApp.postEvent(event, atStart: false)
         }
-        return visit(root)
-    }
-
-    /// Bounded fixture-only diagnostics make a native bridge failure reviewable.
-    private static func dumpAccessibilityTree(_ root: NSView) {
-        var visited = Set<ObjectIdentifier>()
-        func visit(_ value: Any, depth: Int) {
-            guard visited.count < 80, let object = value as? NSObject,
-                  visited.insert(ObjectIdentifier(object)).inserted else { return }
-            let element = AccessibleElement(object: object)
-            let children = element.children()
-            print("AX \(String(repeating: " ", count: min(depth, 12)))\(type(of: object)) " +
-                  "id=\(element.identifier() ?? "nil") role=\(element.accessibilityRole()?.rawValue ?? "nil") " +
-                  "children=\(children.count)")
-            for child in children { visit(child, depth: depth + 1) }
-            if let view = value as? NSView {
-                for child in view.subviews { visit(child, depth: depth + 1) }
-            }
-        }
-        visit(root, depth: 0)
     }
 
     private static func keyEvent(_ type: NSEvent.EventType, code: UInt16, characters: String,
